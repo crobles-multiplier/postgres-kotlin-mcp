@@ -28,6 +28,7 @@ A Model Context Protocol (MCP) server that provides tools to interact with Postg
 | `postgres_get_table_schema` | Get detailed schema information for a table | `table_name` (string) | `environment` (staging/release/production) | Column details with data types, constraints, and relationship indicators |
 | `postgres_get_relationships` | Get table relationships (FK, PK, constraints) | `table_name` (string) | `environment` (staging/release/production) | Primary keys, foreign keys, referenced by, unique constraints |
 | `postgres_suggest_joins` | Suggest JOIN queries based on relationships | `table_name` (string) | `environment` (staging/release/production) | Suggested JOIN conditions and example queries |
+| `postgres_get_database_info` | Get database name and connection information | None | `environment` (staging/release/production) | Database name, version, driver info, and connection details |
 | `postgres_connection_stats` | Get connection pool statistics and health info | None | None | HikariCP pool status, metrics, and health information |
 
 ### Safety Features
@@ -112,11 +113,48 @@ environment:
 
 ## Building
 
+The build system requires a `jarSuffix` parameter to create database-specific JAR files:
+
 ```bash
-./gradlew shadowJar
+# Build JAR for specific database system
+./gradlew shadowJar -PjarSuffix=incidents
+./gradlew shadowJar -PjarSuffix=users
+./gradlew shadowJar -PjarSuffix=analytics
+./gradlew shadowJar -PjarSuffix=payroll
 ```
 
-This creates a fat JAR at `build/libs/postgres-mcp-tool-1.0-SNAPSHOT.jar`.
+This creates JAR files with descriptive names:
+- `build/libs/postgres-mcp-tool-incidents.jar`
+- `build/libs/postgres-mcp-tool-users.jar`
+- `build/libs/postgres-mcp-tool-analytics.jar`
+- `build/libs/postgres-mcp-tool-payroll.jar`
+
+**Note**: The `jarSuffix` parameter is required. Running `./gradlew shadowJar` without it will fail with a clear error message.
+
+### Multi-Database Workflow
+
+This naming convention enables you to manage multiple database systems efficiently:
+
+1. **Configure** your `database.properties` for the target database system
+2. **Build** the JAR with a descriptive suffix: `./gradlew shadowJar -PjarSuffix=incidents`
+3. **Repeat** for other database systems (users, analytics, payroll, etc.)
+4. **Deploy** multiple MCP servers, each with its own JAR and database configuration
+5. **Distinguish** easily between different database connections in your AI agent
+
+**Example Workflow:**
+```bash
+# Configure database.properties for incidents database
+# Build incidents JAR
+./gradlew shadowJar -PjarSuffix=incidents
+
+# Update database.properties for users database
+# Build users JAR
+./gradlew shadowJar -PjarSuffix=users
+
+# Update database.properties for analytics database
+# Build analytics JAR
+./gradlew shadowJar -PjarSuffix=analytics
+```
 
 ## Environment-Based Database Routing
 
@@ -142,9 +180,29 @@ Add to your `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
+    "postgres-incidents": {
+      "command": "java",
+      "args": ["-jar", "/absolute/path/to/postgres-mcp-tool-incidents.jar"]
+    },
+    "postgres-users": {
+      "command": "java",
+      "args": ["-jar", "/absolute/path/to/postgres-mcp-tool-users.jar"]
+    },
+    "postgres-analytics": {
+      "command": "java",
+      "args": ["-jar", "/absolute/path/to/postgres-mcp-tool-analytics.jar"]
+    }
+  }
+}
+```
+
+**Single Database Setup:**
+```json
+{
+  "mcpServers": {
     "postgres-mcp-tool": {
       "command": "java",
-      "args": ["-jar", "/absolute/path/to/postgres-mcp-tool-1.0-SNAPSHOT.jar"]
+      "args": ["-jar", "/absolute/path/to/postgres-mcp-tool-incidents.jar"]
     }
   }
 }
@@ -152,19 +210,48 @@ Add to your `claude_desktop_config.json`:
 
 ### Augment IntelliJ Plugin Configuration
 
-In the Augment IntelliJ plugin, add a new MCP server with:
-- **Name**: `postgres-mcp-tool`
-- **Command**: `java -jar /absolute/path/to/postgres-mcp-tool-1.0-SNAPSHOT.jar`
+In the Augment IntelliJ plugin, add MCP servers for each database system:
+
+**For Incidents Database:**
+- **Name**: `postgres-incidents`
+- **Command**: `java -jar /absolute/path/to/postgres-mcp-tool-incidents.jar`
+
+**For Users Database:**
+- **Name**: `postgres-users`
+- **Command**: `java -jar /absolute/path/to/postgres-mcp-tool-users.jar`
+
+**For Analytics Database:**
+- **Name**: `postgres-analytics`
+- **Command**: `java -jar /absolute/path/to/postgres-mcp-tool-analytics.jar`
 
 ### Other AI Agents
 
 For other MCP-compatible AI agents, use the standard MCP server configuration format:
 
+**Multiple Database Systems:**
+```json
+[
+  {
+    "name": "postgres-incidents",
+    "command": "java",
+    "args": ["-jar", "/absolute/path/to/postgres-mcp-tool-incidents.jar"],
+    "env": {}
+  },
+  {
+    "name": "postgres-users",
+    "command": "java",
+    "args": ["-jar", "/absolute/path/to/postgres-mcp-tool-users.jar"],
+    "env": {}
+  }
+]
+```
+
+**Single Database System:**
 ```json
 {
   "name": "postgres-mcp-tool",
   "command": "java",
-  "args": ["-jar", "/absolute/path/to/postgres-mcp-tool-1.0-SNAPSHOT.jar"],
+  "args": ["-jar", "/absolute/path/to/postgres-mcp-tool-incidents.jar"],
   "env": {}
 }
 ```
@@ -174,9 +261,18 @@ For other MCP-compatible AI agents, use the standard MCP server configuration fo
 Before using the MCP server, ensure you have:
 
 1. **Java 17+** installed and available in your PATH
-2. **Built the JAR file** using `./gradlew shadowJar`
-3. **Set environment variables** for your database connections (see Environment Variables Setup below)
+2. **Built the JAR file** using `./gradlew shadowJar -PjarSuffix=<database-name>`
+3. **Set environment variables** for your database connections (see Environment Variables Setup above)
 4. **Database permissions** - the configured user must have SELECT permissions on the target databases
+
+### Database-Specific JAR Management
+
+Since you can create multiple JAR files for different database systems, you can:
+
+1. **Build separate JARs** for each database system (incidents, users, analytics, etc.)
+2. **Configure different database.properties** for each system before building
+3. **Deploy multiple MCP servers** simultaneously, each connecting to different databases
+4. **Easily distinguish** between database connections using descriptive JAR names
 
 ## Architecture
 
@@ -197,6 +293,7 @@ This server is built using:
 ## Example Usage
 
 ### Basic Database Exploration
+- *"What database am I connected to?"*
 - *"What tables are in my database?"*
 - *"Show me the schema for the users table"*
 - *"Query the first 10 rows from the products table"*
@@ -255,6 +352,12 @@ postgres-mcp-tool/
 3. **Permission Denied**: Ensure the database user has SELECT permissions
 4. **Tool Not Showing**: Verify the JAR path in your AI agent's MCP configuration
 5. **Java Not Found**: Ensure Java 17+ is installed and in your PATH
+6. **Build Failed - Missing jarSuffix**:
+   - Use `./gradlew shadowJar -PjarSuffix=<database-name>` instead of `./gradlew shadowJar`
+   - The jarSuffix parameter is required to create descriptive JAR names
+7. **Wrong Database Connection**:
+   - Verify you're using the correct JAR file for the intended database system
+   - Check the JAR filename matches your database system (e.g., `postgres-mcp-tool-incidents.jar` for incidents database)
 
 ### Debugging
 

@@ -119,9 +119,14 @@ data class DatabaseConnectionConfig(
     
     companion object {
 
-        private val config = java.util.Properties().apply {
-            DatabaseConnectionConfig::class.java.getResourceAsStream("/database.properties")?.use { load(it) }
+        private fun loadConfig(configFile: String = "database.properties"): java.util.Properties {
+            return java.util.Properties().apply {
+                DatabaseConnectionConfig::class.java.getResourceAsStream("/$configFile")?.use { load(it) }
+                    ?: throw IllegalStateException("Configuration file /$configFile not found in classpath")
+            }
         }
+
+        private val config = loadConfig()
 
         /**
          * Resolves environment variables in property values

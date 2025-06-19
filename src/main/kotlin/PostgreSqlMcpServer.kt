@@ -295,6 +295,36 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
         CallToolResult(content = listOf(TextContent(result)))
     }
 
+    // Register postgres_get_database_info tool
+    server.addTool(
+        name = "postgres_get_database_info",
+        description = "Get database name and connection information",
+        inputSchema = Tool.Input(
+            properties = buildJsonObject {
+                putJsonObject("environment") {
+                    put("type", "string")
+                    put("description", "The database environment to query (staging, release, production). Defaults to staging if not specified.")
+                    putJsonArray("enum") {
+                        add("staging")
+                        add("release")
+                        add("production")
+                    }
+                }
+            }
+        )
+    ) { request ->
+        val result = try {
+            val environment = request.arguments["environment"]?.jsonPrimitive?.content
+            val repository = connectionManager.getConnection(environment)
+            val dbInfo = repository.getDatabaseInfo()
+            formatDatabaseInfo(dbInfo, environment ?: "staging")
+        } catch (e: Exception) {
+            "Error getting database info: ${e.message}"
+        }
+
+        CallToolResult(content = listOf(TextContent(result)))
+    }
+
     // Register postgres_connection_stats tool
     server.addTool(
         name = "postgres_connection_stats",
@@ -542,5 +572,28 @@ private fun formatConnectionStats(stats: Map<String, Any>): String {
         appendLine("  • JMX monitoring and metrics")
         appendLine("  • Optimized performance and memory usage")
         appendLine("  • Thread-safe concurrent operations")
+    }
+}
+
+/**
+ * Format database information
+ */
+private fun formatDatabaseInfo(dbInfo: DatabaseInfo, environment: String): String {
+    return buildString {
+        appendLine("=== Database Information ===")
+        appendLine()
+        appendLine("Database Details:")
+        appendLine("  • Database Name: ${dbInfo.databaseName}")
+        appendLine("  • Database Product: ${dbInfo.databaseProduct}")
+        appendLine("  • Database Version: ${dbInfo.databaseVersion}")
+        appendLine()
+        appendLine("Connection Details:")
+        appendLine("  • Environment: $environment")
+        appendLine("  • Connection URL: ${dbInfo.url}")
+        appendLine("  • Username: ${dbInfo.username}")
+        appendLine()
+        appendLine("Driver Information:")
+        appendLine("  • Driver Name: ${dbInfo.driverName}")
+        appendLine("  • Driver Version: ${dbInfo.driverVersion}")
     }
 }

@@ -418,6 +418,31 @@ class PostgreSqlRepository {
     }
 
     /**
+     * Get database name and connection information
+     */
+    suspend fun getDatabaseInfo(): DatabaseInfo = withContext(Dispatchers.IO) {
+        var connection: Connection? = null
+        try {
+            connection = getConnection()
+            val metaData = connection.metaData
+
+            DatabaseInfo(
+                databaseName = connection.catalog ?: "unknown",
+                databaseVersion = metaData.databaseProductVersion,
+                databaseProduct = metaData.databaseProductName,
+                driverName = metaData.driverName,
+                driverVersion = metaData.driverVersion,
+                url = metaData.url,
+                username = metaData.userName
+            )
+        } catch (e: SQLException) {
+            throw DatabaseException("Failed to get database info: ${e.message}", e)
+        } finally {
+            connection?.close()
+        }
+    }
+
+    /**
      * Test database connection
      */
     suspend fun testConnection(): Boolean = withContext(Dispatchers.IO) {
@@ -469,6 +494,16 @@ data class DatabaseTable(
     val name: String,
     val schema: String?,
     val type: String
+)
+
+data class DatabaseInfo(
+    val databaseName: String,
+    val databaseVersion: String,
+    val databaseProduct: String,
+    val driverName: String,
+    val driverVersion: String,
+    val url: String,
+    val username: String
 )
 
 /**

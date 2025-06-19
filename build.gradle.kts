@@ -55,6 +55,14 @@ kotlin {
 // Configure the shadow plugin to create a fat JAR
 tasks.shadowJar {
     archiveClassifier.set("")
+    archiveVersion.set("") // Remove version from JAR filename
+
+    // Require jarSuffix property to distinguish different database JARs
+    val jarSuffix = project.findProperty("jarSuffix") as String?
+        ?: throw GradleException("jarSuffix property is required. Use: ./gradlew shadowJar -PjarSuffix=<database-name>")
+
+    archiveBaseName.set("${project.name}-$jarSuffix")
+
     manifest {
         attributes["Main-Class"] = "PostgreSqlMcpServerKt"
     }
