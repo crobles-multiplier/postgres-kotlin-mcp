@@ -42,40 +42,72 @@ Create a `database.properties` file in `src/main/resources/` with your database 
 
 ```properties
 # PostgreSQL Database Configuration
+# All sensitive information should be provided via environment variables
 
-# Database Connection URLs (include credentials in URL)
-database.staging.url=postgresql://username:password@localhost:5432/mydb_staging
-database.release.url=postgresql://username:password@localhost:5432/mydb_release
-database.production.url=${POSTGRES_PRODUCTION_CONNECTION_STRING}
+# Staging Environment
+database.staging.jdbc-url=${POSTGRES_STAGING_JDBC_URL}
+database.staging.username=${POSTGRES_STAGING_USERNAME}
+database.staging.password=${POSTGRES_STAGING_PASSWORD}
 
-# HikariCP Connection Pool Configuration
-# All properties are REQUIRED - no fallback defaults are provided
+# Release Environment
+database.release.jdbc-url=${POSTGRES_RELEASE_JDBC_URL}
+database.release.username=${POSTGRES_RELEASE_USERNAME}
+database.release.password=${POSTGRES_RELEASE_PASSWORD}
 
-# Global HikariCP settings (required)
-hikari.driver-class-name=org.postgresql.Driver
-hikari.maximum-pool-size=10
-hikari.minimum-idle=2
-hikari.connection-timeout=30000
-hikari.idle-timeout=600000
-hikari.max-lifetime=1800000
-hikari.validation-timeout=5000
-hikari.leak-detection-threshold=60000
+# Production Environment
+database.production.jdbc-url=${POSTGRES_PRODUCTION_JDBC_URL}
+database.production.username=${POSTGRES_PRODUCTION_USERNAME}
+database.production.password=${POSTGRES_PRODUCTION_PASSWORD}
 
-# Environment-specific HikariCP overrides (optional)
-# Staging - smaller pool for development
+# HikariCP Connection Pool Configuration (Optional)
+# Uses sensible defaults if not specified
+
+# Optional: Override default pool sizes per environment
 hikari.staging.maximum-pool-size=5
 hikari.staging.minimum-idle=1
-hikari.staging.idle-timeout=300000
-hikari.staging.max-lifetime=900000
 
-# Release - medium pool for testing
 hikari.release.maximum-pool-size=8
 hikari.release.minimum-idle=2
 
-# Production - larger pool, no leak detection for performance
 hikari.production.maximum-pool-size=15
 hikari.production.minimum-idle=3
-# Note: leak-detection-threshold is automatically disabled for production
+```
+
+### Environment Variables Setup
+
+Set the required environment variables for your database connections:
+
+```bash
+# Staging Environment
+export POSTGRES_STAGING_JDBC_URL="jdbc:postgresql://localhost:5432/mydb_staging"
+export POSTGRES_STAGING_USERNAME="your_staging_username"
+export POSTGRES_STAGING_PASSWORD="your_staging_password"
+
+# Release Environment
+export POSTGRES_RELEASE_JDBC_URL="jdbc:postgresql://localhost:5432/mydb_release"
+export POSTGRES_RELEASE_USERNAME="your_release_username"
+export POSTGRES_RELEASE_PASSWORD="your_release_password"
+
+# Production Environment
+export POSTGRES_PRODUCTION_JDBC_URL="jdbc:postgresql://prod-host:5432/mydb_production"
+export POSTGRES_PRODUCTION_USERNAME="your_production_username"
+export POSTGRES_PRODUCTION_PASSWORD="your_production_password"
+```
+
+**For Windows (PowerShell):**
+```powershell
+$env:POSTGRES_STAGING_JDBC_URL="jdbc:postgresql://localhost:5432/mydb_staging"
+$env:POSTGRES_STAGING_USERNAME="your_staging_username"
+$env:POSTGRES_STAGING_PASSWORD="your_staging_password"
+# ... repeat for release and production
+```
+
+**For Docker/Container environments:**
+```yaml
+environment:
+  - POSTGRES_STAGING_JDBC_URL=jdbc:postgresql://localhost:5432/mydb_staging
+  - POSTGRES_STAGING_USERNAME=your_staging_username
+  - POSTGRES_STAGING_PASSWORD=your_staging_password
 ```
 
 ## Building
@@ -103,6 +135,10 @@ AI agents automatically extract environment information from user prompts:
 
 Add this configuration to your AI agent's MCP configuration file:
 
+### Claude Desktop Configuration
+
+Add to your `claude_desktop_config.json`:
+
 ```json
 {
   "mcpServers": {
@@ -113,6 +149,34 @@ Add this configuration to your AI agent's MCP configuration file:
   }
 }
 ```
+
+### Augment IntelliJ Plugin Configuration
+
+In the Augment IntelliJ plugin, add a new MCP server with:
+- **Name**: `postgres-mcp-tool`
+- **Command**: `java -jar /absolute/path/to/postgres-mcp-tool-1.0-SNAPSHOT.jar`
+
+### Other AI Agents
+
+For other MCP-compatible AI agents, use the standard MCP server configuration format:
+
+```json
+{
+  "name": "postgres-mcp-tool",
+  "command": "java",
+  "args": ["-jar", "/absolute/path/to/postgres-mcp-tool-1.0-SNAPSHOT.jar"],
+  "env": {}
+}
+```
+
+### Prerequisites
+
+Before using the MCP server, ensure you have:
+
+1. **Java 17+** installed and available in your PATH
+2. **Built the JAR file** using `./gradlew shadowJar`
+3. **Set environment variables** for your database connections (see Environment Variables Setup below)
+4. **Database permissions** - the configured user must have SELECT permissions on the target databases
 
 ## Architecture
 
@@ -161,28 +225,36 @@ postgres-mcp-tool/
 ├── src/
 │   ├── main/
 │   │   ├── kotlin/
-│   │   │   ├── PostgreSqlMcpServer.kt      # Main MCP server implementation
-│   │   │   ├── PostgreSqlRepository.kt     # Database operations and queries
-│   │   │   ├── HikariConnectionManager.kt  # Connection pool management
-│   │   │   └── DatabaseConfiguration.kt    # Configuration management
+│   │   │   ├── PostgreSqlMcpServer.kt         # Main MCP server implementation
+│   │   │   ├── PostgreSqlRepository.kt        # Database operations and queries
+│   │   │   ├── HikariConnectionManager.kt     # Connection pool management
+│   │   │   └── DatabaseConnectionConfig.kt    # Database configuration DTO
 │   │   └── resources/
-│   │       └── database.properties         # Database configuration
+│   │       └── database.properties            # Database configuration
 │   └── test/kotlin/
-│       └── PostgreSqlMcpServerTest.kt      # Unit tests
-├── build.gradle.kts                        # Build configuration
-├── docker-compose.yml                      # Docker setup for testing
-├── init.sql                                # Sample database schema
-└── README.md                              # This documentation
+│       ├── PostgreSqlMcpServerTest.kt         # Integration tests
+│       ├── DatabaseConnectionConfigTest.kt    # DTO unit tests
+│       └── DatabaseConfigurationTest.kt       # Configuration integration tests
+├── build.gradle.kts                           # Build configuration
+├── docker-compose.yml                         # Docker setup for testing
+├── init.sql                                   # Sample database schema
+└── README.md                                 # This documentation
 ```
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Connection Failed**: Check your connection string format and database accessibility
-2. **Permission Denied**: Ensure the database user has SELECT permissions
-3. **Tool Not Showing**: Verify the JAR path in your AI agent's MCP configuration
-4. **Java Not Found**: Ensure Java 17+ is installed and in your PATH
+1. **Connection Failed**:
+   - Check that all required environment variables are set
+   - Verify JDBC URL format: `jdbc:postgresql://host:port/database`
+   - Ensure database credentials are correct
+2. **Environment Variables Not Found**:
+   - Verify environment variables are exported in your shell
+   - For AI agents, ensure environment variables are available to the Java process
+3. **Permission Denied**: Ensure the database user has SELECT permissions
+4. **Tool Not Showing**: Verify the JAR path in your AI agent's MCP configuration
+5. **Java Not Found**: Ensure Java 17+ is installed and in your PATH
 
 ### Debugging
 
@@ -221,7 +293,7 @@ tail -f ~/Library/Logs/Claude/mcp*.log
 ### What Stayed the Same
 - **All existing functionality**: Every tool and feature has been preserved
 - **Database operations**: HikariCP connection management unchanged
-- **Configuration**: Same `database.properties` file format
+- **Configuration**: Clean `database.properties` with simplified format
 - **API compatibility**: All tool parameters and responses remain identical
 
 ### Technical Details

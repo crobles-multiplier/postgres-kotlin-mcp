@@ -4,6 +4,7 @@ import org.junit.jupiter.api.assertThrows
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class PostgreSqlMcpServerTest {
@@ -180,28 +181,35 @@ class PostgreSqlMcpServerTest {
     }
 
     @Test
-    fun `test DatabaseConfiguration connection strings`() {
-        // Test getting connection strings for known environments
-        val stagingUrl = DatabaseConfiguration.getConnectionString("staging")
-        assertNotNull(stagingUrl)
-        assertTrue(stagingUrl!!.startsWith("postgresql://"))
+    fun `test DatabaseConnectionConfig database connection properties`() {
+        // Test getting complete database config for known environments
+        val stagingConfig = DatabaseConnectionConfig.forEnvironment("staging")
+        assertTrue(stagingConfig.jdbcUrl.startsWith("jdbc:postgresql://"))
+        assertEquals("testuser", stagingConfig.username)
+        assertEquals("testpass", stagingConfig.password)
+        assertEquals("staging", stagingConfig.environment)
 
-        val releaseUrl = DatabaseConfiguration.getConnectionString("release")
-        assertNotNull(releaseUrl)
-        assertTrue(releaseUrl!!.startsWith("postgresql://"))
+        val releaseConfig = DatabaseConnectionConfig.forEnvironment("release")
+        assertTrue(releaseConfig.jdbcUrl.startsWith("jdbc:postgresql://"))
+        assertEquals("testuser", releaseConfig.username)
+        assertEquals("testpass", releaseConfig.password)
+        assertEquals("release", releaseConfig.environment)
+
+        // Test complete configuration check
+        assertTrue(DatabaseConnectionConfig.hasCompleteConfiguration("staging"))
+        assertTrue(DatabaseConnectionConfig.hasCompleteConfiguration("release"))
+        assertFalse(DatabaseConnectionConfig.hasCompleteConfiguration("nonexistent"))
     }
 
     @Test
-    fun `test DatabaseConfiguration default environment`() {
-        val defaultEnv = DatabaseConfiguration.getDefaultEnvironment()
-        assertEquals("staging", defaultEnv)
-    }
+    fun `test DatabaseConnectionConfig unknown environment`() {
+        // Should return false for unknown environments
+        assertFalse(DatabaseConnectionConfig.hasCompleteConfiguration("nonexistent"))
 
-    @Test
-    fun `test DatabaseConfiguration unknown environment`() {
-        val unknownUrl = DatabaseConfiguration.getConnectionString("nonexistent")
-        // Should return null for unknown environments
-        assertEquals(null, unknownUrl)
+        // Should throw exception when trying to get config for unknown environment
+        assertThrows<IllegalArgumentException> {
+            DatabaseConnectionConfig.forEnvironment("nonexistent")
+        }
     }
 
     @Test
@@ -239,63 +247,52 @@ class PostgreSqlMcpServerTest {
     }
 
     @Test
-    fun `test DatabaseConfiguration HikariCP properties`() {
+    fun `test DatabaseConnectionConfig HikariCP properties`() {
         // Test that HikariCP properties can be read from database.properties
-        val maxPoolSize = DatabaseConfiguration.getProperty("hikari.staging.maximum-pool-size")
-        assertEquals("5", maxPoolSize)
+        val stagingMaxPoolSize = DatabaseConnectionConfig.getProperty("hikari.staging.maximum-pool-size")
+        assertEquals("5", stagingMaxPoolSize)
 
-        val globalMaxPoolSize = DatabaseConfiguration.getProperty("hikari.maximum-pool-size")
-        assertEquals("10", globalMaxPoolSize)
+        val releaseMaxPoolSize = DatabaseConnectionConfig.getProperty("hikari.release.maximum-pool-size")
+        assertEquals("8", releaseMaxPoolSize)
 
-        val connectionTimeout = DatabaseConfiguration.getProperty("hikari.connection-timeout")
-        assertEquals("30000", connectionTimeout)
-
-        // Test that required driver class name is present
-        val driverClassName = DatabaseConfiguration.getProperty("hikari.driver-class-name")
-        assertEquals("org.postgresql.Driver", driverClassName)
+        // Test that missing properties return null
+        val productionMaxPoolSize = DatabaseConnectionConfig.getProperty("hikari.production.maximum-pool-size")
+        assertNull(productionMaxPoolSize) // Not configured in test environment
     }
 
     @Test
-    fun `test PostgreSQL URL conversion for HikariCP`() {
-        // Test that both PostgreSqlRepository and HikariConnectionManager handle URL conversion
+    fun `test HikariCP standard configuration format`() {
+        // Test that database config DTO provides proper format
+        val stagingConfig = DatabaseConnectionConfig.forEnvironment("staging")
+        assertTrue(stagingConfig.jdbcUrl.startsWith("jdbc:postgresql://"))
+
+        // Test PostgreSqlRepository can still handle direct URL construction
         val postgresUrl = "postgresql://user:pass@localhost:5432/testdb"
-
-        // Test PostgreSqlRepository conversion (via constructor)
         val repository = PostgreSqlRepository(postgresUrl)
-        // We can't directly test the private jdbcUrl, but we can verify it doesn't throw
-        assertTrue(true) // Constructor completed successfully
+        // Constructor completed successfully without throwing
+        assertTrue(true)
 
-        // Test that database URLs from properties are in the expected format
-        val stagingUrl = DatabaseConfiguration.getConnectionString("staging")
-        assertNotNull(stagingUrl)
-        assertTrue(stagingUrl!!.startsWith("postgresql://"))
+        // Test that DTO provides proper JDBC format
+        assertTrue(stagingConfig.jdbcUrl.startsWith("jdbc:postgresql://"))
     }
 
     @Test
-    fun `test HikariCP strict configuration validation`() {
-        // Test that HikariConnectionManager validates all required properties are present
+    fun `test HikariCP simplified configuration`() {
+        // Test that HikariConnectionManager works with minimal configuration
         val connectionManager = HikariConnectionManager()
 
-        // Since we have a complete test configuration, initialization should work
-        // This test verifies that the strict validation doesn't break with proper configuration
+        // Since we use sensible defaults, minimal configuration should work
         assertFalse(connectionManager.isEnvironmentModeEnabled())
 
-        // Test that all required properties are available in test configuration
-        val requiredProperties = listOf(
-            "hikari.driver-class-name",
-            "hikari.maximum-pool-size",
-            "hikari.minimum-idle",
-            "hikari.connection-timeout",
-            "hikari.idle-timeout",
-            "hikari.max-lifetime",
-            "hikari.validation-timeout",
-            "hikari.leak-detection-threshold"
-        )
+        // Test that optional properties can be read when present
+        val stagingMaxPoolSize = DatabaseConnectionConfig.getProperty("hikari.staging.maximum-pool-size")
+        assertEquals("5", stagingMaxPoolSize)
 
-        for (property in requiredProperties) {
-            val value = DatabaseConfiguration.getProperty(property)
-            assertNotNull(value, "Required property $property should be present in test configuration")
-            assertTrue(value!!.isNotBlank(), "Required property $property should not be blank")
-        }
+        val releaseMaxPoolSize = DatabaseConnectionConfig.getProperty("hikari.release.maximum-pool-size")
+        assertEquals("8", releaseMaxPoolSize)
+
+        // Test that missing properties return null (will use defaults)
+        val missingProperty = DatabaseConnectionConfig.getProperty("hikari.nonexistent.property")
+        assertNull(missingProperty)
     }
 }
