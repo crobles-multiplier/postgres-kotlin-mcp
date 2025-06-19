@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "postgres-multi-env": {
+      "command": "java",
+      "args": [
+        "-jar",
+        "/absolute/path/to/postgres-mcp-tool-1.0-SNAPSHOT.jar"
+      ],
+      "env": {
+        "JAVA_HOME": "/path/to/java",
+        "POSTGRES_STAGING_CONNECTION_STRING": "postgresql://staging_user:staging_pass@staging-db:5432/staging_db",
+        "POSTGRES_RELEASE_CONNECTION_STRING": "postgresql://release_user:release_pass@release-db:5432/release_db",
+        "POSTGRES_PRODUCTION_CONNECTION_STRING": "postgresql://prod_user:prod_pass@prod-db:5432/prod_db"
+      }
+    }
+  }
+}
