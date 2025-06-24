@@ -5,6 +5,8 @@ import java.sql.Connection
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import javax.sql.DataSource
+import model.connection.ConfigurationLoader
+import model.connection.DatabaseConnectionConfig
 
 /**
  * HikariCP-based Database Connection Manager
@@ -133,14 +135,14 @@ class HikariConnectionManager {
     private fun getConfigValueOrNull(environment: String, setting: String): String? {
         // Try environment-specific setting first: hikari.staging.maximum-pool-size
         val envSpecificKey = "hikari.$environment.$setting"
-        val envSpecificValue = DatabaseConnectionConfig.getProperty(envSpecificKey)
+        val envSpecificValue = ConfigurationLoader.getProperty(envSpecificKey)
         if (!envSpecificValue.isNullOrBlank()) {
             return envSpecificValue
         }
 
         // Try global hikari setting: hikari.maximum-pool-size
         val globalKey = "hikari.$setting"
-        return DatabaseConnectionConfig.getProperty(globalKey)
+        return ConfigurationLoader.getProperty(globalKey)
     }
     
     /**

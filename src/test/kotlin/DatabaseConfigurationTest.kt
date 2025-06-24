@@ -1,6 +1,8 @@
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.assertThrows
+import model.connection.DatabaseConnectionConfig
+import model.connection.ConfigurationLoader
 
 class DatabaseConnectionConfigIntegrationTest {
 
@@ -62,10 +64,10 @@ class DatabaseConnectionConfigIntegrationTest {
 
     @Test
     fun `should get properties from database properties file`() {
-        val stagingMaxPoolSize = DatabaseConnectionConfig.getProperty("hikari.staging.maximum-pool-size")
+        val stagingMaxPoolSize = ConfigurationLoader.getProperty("hikari.staging.maximum-pool-size")
         assertEquals("5", stagingMaxPoolSize)
 
-        val releaseMaxPoolSize = DatabaseConnectionConfig.getProperty("hikari.release.maximum-pool-size")
+        val releaseMaxPoolSize = ConfigurationLoader.getProperty("hikari.release.maximum-pool-size")
         assertEquals("8", releaseMaxPoolSize)
     }
 }

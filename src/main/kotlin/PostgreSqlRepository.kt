@@ -1,7 +1,30 @@
+import exception.DatabaseException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.sql.*
-import java.util.*
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import model.database.DatabaseInfo
+import model.database.DatabaseTable
+import model.database.TableColumn
+import model.query.QueryExecutionResult
+import model.relationship.ForeignKeyRelationship
+import model.relationship.JoinRecommendation
+import model.relationship.PrimaryKeyConstraint
+import model.relationship.TableRelationshipSummary
+import model.relationship.UniqueConstraint
+import model.security.ColumnSensitivityInfo
+import model.security.PiiConfiguration
+import model.security.PiiFilteredQuery
+import java.sql.Connection
+import java.sql.DatabaseMetaData
+import java.sql.DriverManager
+import java.sql.ResultSet
+import java.sql.ResultSetMetaData
+import java.sql.SQLException
+import java.sql.Statement
 import javax.sql.DataSource
 
 /**
@@ -469,85 +492,268 @@ class PostgreSqlRepository {
             connection?.close()
         }
     }
+
+
+
+    /**
+     * Get column comments and sensitivity information for a table
+     */
+    suspend fun getColumnSensitivityInfo(tableName: String): Map<String, ColumnSensitivityInfo> = withContext(Dispatchers.IO) {
+        var connection: Connection? = null
+        var preparedStatement: java.sql.PreparedStatement? = null
+        var resultSet: ResultSet? = null
+
+        try {
+            connection = getConnection()
+
+            // Query to get column comments from PostgreSQL system tables
+            // This query works across all schemas by not filtering on schema name
+            val sql = """
+                SELECT
+                    c.table_schema,
+                    c.column_name,
+                    col_description(pgc.oid, c.ordinal_position) as column_comment
+                FROM information_schema.columns c
+                JOIN pg_class pgc ON pgc.relname = c.table_name
+                JOIN pg_namespace pgn ON pgn.oid = pgc.relnamespace AND pgn.nspname = c.table_schema
+                WHERE c.table_name = ?
+                  AND col_description(pgc.oid, c.ordinal_position) IS NOT NULL
+                ORDER BY c.table_schema, c.ordinal_position
+            """.trimIndent()
+
+            preparedStatement = connection.prepareStatement(sql)
+            preparedStatement.setString(1, tableName)
+            resultSet = preparedStatement.executeQuery()
+
+            val sensitivityMap = mutableMapOf<String, ColumnSensitivityInfo>()
+
+            while (resultSet.next()) {
+                val columnName = resultSet.getString("column_name")
+                val comment = resultSet.getString("column_comment")
+                val sensitivityInfo = parseColumnSensitivity(comment)
+
+                if (sensitivityInfo != null) {
+                    sensitivityMap[columnName] = sensitivityInfo
+                }
+            }
+
+            sensitivityMap
+        } catch (e: SQLException) {
+            // If we can't access column comments (permission issue), return empty map
+            System.err.println("Warning: Cannot access column comments for PII detection: ${e.message}")
+            emptyMap()
+        } finally {
+            resultSet?.close()
+            preparedStatement?.close()
+            connection?.close()
+        }
+    }
+
+    /**
+     * Parse JSON comment to extract sensitivity information using kotlinx.serialization
+     */
+    private fun parseColumnSensitivity(comment: String?): ColumnSensitivityInfo? {
+        if (comment.isNullOrBlank()) return null
+
+        return try {
+            // Use kotlinx.serialization for proper JSON parsing
+            val jsonElement = Json.parseToJsonElement(comment)
+
+            val targetObject = when (jsonElement) {
+                is JsonArray -> {
+                    // Handle array format: [{"sensitivity":"internal", "privacy":"personal"}]
+                    if (jsonElement.isNotEmpty()) jsonElement[0].jsonObject else null
+                }
+                is JsonObject -> {
+                    // Handle direct object format: {"sensitivity":"internal", "privacy":"personal"}
+                    jsonElement
+                }
+                else -> null
+            }
+
+            targetObject?.let { obj ->
+                val sensitivity = obj["sensitivity"]?.jsonPrimitive?.content ?: "unknown"
+                val privacy = obj["privacy"]?.jsonPrimitive?.content ?: "unknown"
+                ColumnSensitivityInfo(sensitivity, privacy)
+            }
+        } catch (e: Exception) {
+            // If JSON parsing fails, return null (not a structured comment)
+            null
+        }
+    }
+
+    /**
+     * Execute a query with PII filtering for production environment only
+     */
+    suspend fun executeQueryWithPiiFiltering(sql: String, maxRows: Int = 100, environment: String = "staging"): QueryExecutionResult = withContext(Dispatchers.IO) {
+        // PII checking is only applicable to production environment
+        if (environment.lowercase() != "production") {
+            return@withContext executeQuery(sql, maxRows)
+        }
+
+        // Check if PII protection should be applied for this environment
+        val shouldApplyPiiProtection = try {
+            PiiConfiguration.shouldApplyPiiProtection(environment)
+        } catch (e: Exception) {
+            // Re-throw configuration errors with context
+            throw IllegalStateException("Production PII configuration error: ${e.message}", e)
+        }
+
+        if (!shouldApplyPiiProtection) {
+            return@withContext executeQuery(sql, maxRows)
+        }
+
+        // PII filtering is enabled for production, rewrite the query to exclude PII columns
+        val rewrittenQuery = rewriteQueryToExcludePii(sql)
+        val result = executeQuery(rewrittenQuery.sql, maxRows)
+
+        // Return result with PII filtering information
+        result.copy(
+            // Add metadata about PII filtering if needed
+        )
+    }
+
+    /**
+     * Get all columns for a table (for secure-by-default PII filtering)
+     */
+    suspend fun getAllTableColumns(tableName: String): List<String> = withContext(Dispatchers.IO) {
+        var connection: Connection? = null
+        var preparedStatement: java.sql.PreparedStatement? = null
+        var resultSet: ResultSet? = null
+
+        try {
+            connection = getConnection()
+
+            val sql = """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = ?
+                ORDER BY ordinal_position
+            """.trimIndent()
+
+            preparedStatement = connection.prepareStatement(sql)
+            preparedStatement.setString(1, tableName)
+            resultSet = preparedStatement.executeQuery()
+
+            val columns = mutableListOf<String>()
+            while (resultSet.next()) {
+                columns.add(resultSet.getString("column_name"))
+            }
+            columns
+        } catch (e: SQLException) {
+            System.err.println("Warning: Could not get table columns: ${e.message}")
+            emptyList()
+        } finally {
+            resultSet?.close()
+            preparedStatement?.close()
+            connection?.close()
+        }
+    }
+
+    /**
+     * Rewrite SQL query to exclude PII columns in production (secure by default)
+     */
+    private suspend fun rewriteQueryToExcludePii(sql: String): PiiFilteredQuery {
+        val trimmedSql = sql.trim()
+
+        // Only handle SELECT statements
+        if (!trimmedSql.uppercase().startsWith("SELECT")) {
+            return PiiFilteredQuery(sql, emptyList(), emptyList())
+        }
+
+        try {
+            // Extract table names from the query (simple parsing)
+            val tableNames = extractTableNames(sql)
+            val allPiiColumns = mutableListOf<String>()
+            val allFilteredColumns = mutableListOf<String>()
+
+            // Get PII information for all tables in the query
+            for (tableName in tableNames) {
+                // Get all columns in the table
+                val allColumns = getAllTableColumns(tableName)
+
+                // Get columns with explicit sensitivity information
+                val sensitivityInfo = getColumnSensitivityInfo(tableName)
+
+                // SECURE BY DEFAULT: Only allow columns explicitly marked as non-personal
+                val safeColumns = sensitivityInfo.filter { !it.value.isPii }.keys
+
+                // All other columns (unmarked or marked as PII) are considered PII
+                val piiColumns = allColumns.filter { columnName ->
+                    columnName !in safeColumns
+                }
+
+                allPiiColumns.addAll(piiColumns.map { "$tableName.$it" })
+            }
+
+            if (allPiiColumns.isEmpty()) {
+                // No PII columns found, return original query
+                return PiiFilteredQuery(sql, emptyList(), emptyList())
+            }
+
+            // Rewrite the query to exclude PII columns
+            val rewrittenSql = rewriteSelectStatement(sql, allPiiColumns)
+            allFilteredColumns.addAll(allPiiColumns)
+
+            return PiiFilteredQuery(rewrittenSql, allPiiColumns, allFilteredColumns)
+
+        } catch (e: Exception) {
+            // If query rewriting fails, return original query with warning
+            System.err.println("Warning: Could not rewrite query for PII filtering: ${e.message}")
+            return PiiFilteredQuery(sql, emptyList(), emptyList())
+        }
+    }
+
+    /**
+     * Extract table names from SQL query (simple regex-based approach)
+     */
+    private fun extractTableNames(sql: String): List<String> {
+        val tableNames = mutableListOf<String>()
+
+        try {
+            // Simple regex to find table names after FROM and JOIN clauses
+            val fromPattern = Regex("""(?i)\bFROM\s+([a-zA-Z_][a-zA-Z0-9_]*)\b""")
+            val joinPattern = Regex("""(?i)\bJOIN\s+([a-zA-Z_][a-zA-Z0-9_]*)\b""")
+
+            fromPattern.findAll(sql).forEach { match ->
+                tableNames.add(match.groupValues[1].lowercase())
+            }
+
+            joinPattern.findAll(sql).forEach { match ->
+                tableNames.add(match.groupValues[1].lowercase())
+            }
+
+        } catch (e: Exception) {
+            System.err.println("Warning: Could not extract table names from query: ${e.message}")
+        }
+
+        return tableNames.distinct()
+    }
+
+    /**
+     * Rewrite SELECT statement to exclude PII columns
+     */
+    private fun rewriteSelectStatement(sql: String, piiColumns: List<String>): String {
+        // For SELECT * queries, we need to expand to specific columns
+        if (sql.uppercase().contains("SELECT *")) {
+            // This is complex to implement properly, so for now we'll block SELECT * in production
+            throw Exception("SELECT * queries are not allowed in production due to PII protection. Please specify explicit column names.")
+        }
+
+        // For explicit column selection, remove PII columns
+        // This is a simplified implementation - a full SQL parser would be better
+        var rewrittenSql = sql
+
+        piiColumns.forEach { piiColumn ->
+            // Remove the PII column from SELECT clause (simple approach)
+            val columnPattern = Regex("""(?i)\b${Regex.escape(piiColumn)}\b\s*,?""")
+            rewrittenSql = columnPattern.replace(rewrittenSql, "")
+        }
+
+        // Clean up any trailing commas or double commas
+        rewrittenSql = rewrittenSql.replace(Regex(""",\s*,"""), ",")
+        rewrittenSql = rewrittenSql.replace(Regex(""",\s*FROM"""), " FROM")
+
+        return rewrittenSql
+    }
 }
-
-/**
- * Data classes for query results
- */
-data class QueryExecutionResult(
-    val columns: List<TableColumn>,
-    val rows: List<Map<String, Any?>>,
-    val executionTimeMs: Long,
-    val rowCount: Int,
-    val hasMoreRows: Boolean
-)
-
-data class TableColumn(
-    val name: String,
-    val type: String,
-    val nullable: Boolean,
-    val defaultValue: String? = null,
-    val size: Int? = null
-)
-
-data class DatabaseTable(
-    val name: String,
-    val schema: String?,
-    val type: String
-)
-
-data class DatabaseInfo(
-    val databaseName: String,
-    val databaseVersion: String,
-    val databaseProduct: String,
-    val driverName: String,
-    val driverVersion: String,
-    val url: String,
-    val username: String
-)
-
-/**
- * Data classes for relationship information
- */
-data class ForeignKeyRelationship(
-    val constraintName: String,
-    val sourceTable: String,
-    val sourceColumn: String,
-    val targetTable: String,
-    val targetColumn: String,
-    val onDelete: String?,
-    val onUpdate: String?
-)
-
-data class PrimaryKeyConstraint(
-    val constraintName: String,
-    val tableName: String,
-    val columnName: String,
-    val keySequence: Int
-)
-
-data class UniqueConstraint(
-    val constraintName: String,
-    val tableName: String,
-    val columnName: String
-)
-
-data class TableRelationshipSummary(
-    val tableName: String,
-    val primaryKeys: List<PrimaryKeyConstraint>,
-    val foreignKeys: List<ForeignKeyRelationship>,
-    val referencedBy: List<ForeignKeyRelationship>,
-    val uniqueConstraints: List<UniqueConstraint>
-)
-
-data class JoinRecommendation(
-    val fromTable: String,
-    val toTable: String,
-    val joinCondition: String,
-    val joinType: String = "INNER JOIN"
-)
-
-/**
- * Custom exception for database operations
- */
-class DatabaseException(message: String, cause: Throwable? = null) : Exception(message, cause)

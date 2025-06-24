@@ -1,10 +1,47 @@
-import io.modelcontextprotocol.kotlin.sdk.*
-import io.modelcontextprotocol.kotlin.sdk.server.*
+@file:OptIn(ExperimentalSerializationApi::class)
+
+import io.modelcontextprotocol.kotlin.sdk.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.Implementation
+import io.modelcontextprotocol.kotlin.sdk.ServerCapabilities
+import io.modelcontextprotocol.kotlin.sdk.TextContent
+import io.modelcontextprotocol.kotlin.sdk.Tool
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+import io.modelcontextprotocol.kotlin.sdk.server.StdioServerTransport
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.json.*
-import kotlinx.io.asSource
 import kotlinx.io.asSink
+import kotlinx.io.asSource
 import kotlinx.io.buffered
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
+import model.database.DatabaseInfo
+import model.database.TableColumn
+import model.query.QueryExecutionResult
+import model.relationship.JoinRecommendation
+import model.relationship.TableRelationshipSummary
+import model.security.ColumnSensitivityInfo
+import model.security.PiiConfiguration
+
+// Reusable JSON instances to avoid creating new instances for each usage
+private val jsonParser = Json { ignoreUnknownKeys = true }
+private val prettyJsonFormatter = Json {
+    prettyPrint = true
+    prettyPrintIndent = "  "
+    ignoreUnknownKeys = true
+}
 
 /**
  * PostgreSQL MCP Server
@@ -23,7 +60,6 @@ fun main(args: Array<String>) {
 }
 
 
-
 /**
  * Run MCP server using the official Kotlin MCP SDK
  */
@@ -36,7 +72,11 @@ private fun runMcpServer() {
         try {
             connectionManager.initializeEnvironments()
             System.err.println("Successfully initialized environment-based database connections")
-            System.err.println("Available environments: ${connectionManager.getAvailableEnvironments().joinToString(", ")}")
+            System.err.println(
+                "Available environments: ${
+                    connectionManager.getAvailableEnvironments().joinToString(", ")
+                }"
+            )
         } catch (e: Exception) {
             System.err.println("Failed to initialize database connections: ${e.message}")
             System.err.println("Please check your database.properties configuration file")
@@ -101,7 +141,10 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
                 }
                 putJsonObject("environment") {
                     put("type", "string")
-                    put("description", "The database environment to query (staging, release, production). Defaults to staging if not specified.")
+                    put(
+                        "description",
+                        "The database environment to query (staging, release, production). Defaults to staging if not specified."
+                    )
                     putJsonArray("enum") {
                         add("staging")
                         add("release")
@@ -113,17 +156,41 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
         )
     ) { request ->
         val sql = request.arguments["sql"]?.jsonPrimitive?.content
-        val environment = request.arguments["environment"]?.jsonPrimitive?.content
+        val environment = request.arguments["environment"]?.jsonPrimitive?.content ?: "staging"
 
         val result = if (sql != null && sql.trim().uppercase().startsWith("SELECT")) {
             try {
                 val database = connectionManager.getConnection(environment)
-                val queryResult = database.executeQuery(sql, 100)
-                val envInfo = if (environment != null) " (Environment: $environment)" else ""
-                "Query executed successfully!$envInfo\nRows returned: ${queryResult.rowCount}\n\n" +
-                        formatQueryResult(queryResult)
+
+                // Check if PII protection should be applied for this environment
+                val shouldApplyPiiProtection = try {
+                    PiiConfiguration.shouldApplyPiiProtection(environment)
+                } catch (e: Exception) {
+                    throw IllegalStateException("Production PII configuration error: ${e.message}", e)
+                }
+
+                // Use PII filtering if protection is enabled for this environment
+                val queryResult = if (shouldApplyPiiProtection) {
+                    database.executeQueryWithPiiFiltering(sql, 100, environment)
+                } else {
+                    database.executeQuery(sql, 100)
+                }
+
+                val envInfo = " (Environment: $environment)"
+                val piiWarning = if (shouldApplyPiiProtection) {
+                    "\n🔒 PRODUCTION PII PROTECTION ENABLED - Sensitive columns automatically filtered\n"
+                } else ""
+
+                "Query executed successfully!$envInfo$piiWarning\nRows returned: ${queryResult.rowCount}\n\n" +
+                        formatQueryResult(queryResult, environment)
             } catch (e: Exception) {
-                "Error executing query: ${e.message}"
+                if (environment == "production" && e.message?.contains("SELECT *") == true) {
+                    "❌ Production Safety Error: ${e.message}\n\n" +
+                            "💡 Tip: In production, you must specify explicit column names to avoid accidentally querying PII data.\n" +
+                            "Example: SELECT id, name, created_at FROM users WHERE ..."
+                } else {
+                    "Error executing query: ${e.message}"
+                }
             }
         } else {
             "Only SELECT queries are allowed for safety"
@@ -140,7 +207,10 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
             properties = buildJsonObject {
                 putJsonObject("environment") {
                     put("type", "string")
-                    put("description", "The database environment to query (staging, release, production). Defaults to staging if not specified.")
+                    put(
+                        "description",
+                        "The database environment to query (staging, release, production). Defaults to staging if not specified."
+                    )
                     putJsonArray("enum") {
                         add("staging")
                         add("release")
@@ -180,7 +250,10 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
                 }
                 putJsonObject("environment") {
                     put("type", "string")
-                    put("description", "The database environment to query (staging, release, production). Defaults to staging if not specified.")
+                    put(
+                        "description",
+                        "The database environment to query (staging, release, production). Defaults to staging if not specified."
+                    )
                     putJsonArray("enum") {
                         add("staging")
                         add("release")
@@ -222,7 +295,10 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
                 }
                 putJsonObject("environment") {
                     put("type", "string")
-                    put("description", "The database environment to query (staging, release, production). Defaults to staging if not specified.")
+                    put(
+                        "description",
+                        "The database environment to query (staging, release, production). Defaults to staging if not specified."
+                    )
                     putJsonArray("enum") {
                         add("staging")
                         add("release")
@@ -265,7 +341,10 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
                 }
                 putJsonObject("environment") {
                     put("type", "string")
-                    put("description", "The database environment to query (staging, release, production). Defaults to staging if not specified.")
+                    put(
+                        "description",
+                        "The database environment to query (staging, release, production). Defaults to staging if not specified."
+                    )
                     putJsonArray("enum") {
                         add("staging")
                         add("release")
@@ -303,7 +382,10 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
             properties = buildJsonObject {
                 putJsonObject("environment") {
                     put("type", "string")
-                    put("description", "The database environment to query (staging, release, production). Defaults to staging if not specified.")
+                    put(
+                        "description",
+                        "The database environment to query (staging, release, production). Defaults to staging if not specified."
+                    )
                     putJsonArray("enum") {
                         add("staging")
                         add("release")
@@ -342,15 +424,106 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
 
         CallToolResult(content = listOf(TextContent(result)))
     }
+
+    // Register postgres_get_pii_columns tool
+    server.addTool(
+        name = "postgres_get_pii_columns",
+        description = "Get information about columns marked as containing PII based on database comments",
+        inputSchema = Tool.Input(
+            properties = buildJsonObject {
+                putJsonObject("table_name") {
+                    put("type", "string")
+                    put("description", "Name of the table to check for PII columns")
+                }
+                putJsonObject("environment") {
+                    put("type", "string")
+                    put(
+                        "description",
+                        "The database environment to query (staging, release, production). Defaults to staging if not specified."
+                    )
+                    putJsonArray("enum") {
+                        add("staging")
+                        add("release")
+                        add("production")
+                    }
+                }
+            },
+            required = listOf("table_name")
+        )
+    ) { request ->
+        val tableName = request.arguments["table_name"]?.jsonPrimitive?.content
+        val environment = request.arguments["environment"]?.jsonPrimitive?.content
+
+        val result = if (tableName != null) {
+            try {
+                val database = connectionManager.getConnection(environment)
+                val sensitivityInfo = database.getColumnSensitivityInfo(tableName)
+                val allColumns = database.getAllTableColumns(tableName)
+                val envInfo = if (environment != null) " (Environment: $environment)" else ""
+                formatPiiColumns(sensitivityInfo, allColumns, tableName, envInfo)
+            } catch (e: Exception) {
+                "Error getting PII column information: ${e.message}"
+            }
+        } else {
+            "Table name is required"
+        }
+
+        CallToolResult(content = listOf(TextContent(result)))
+    }
+
+    // Register postgres_explain_query tool
+    server.addTool(
+        name = "postgres_explain_query",
+        description = "Get PostgreSQL query execution plan with performance analysis (EXPLAIN ANALYZE)",
+        inputSchema = Tool.Input(
+            properties = buildJsonObject {
+                putJsonObject("sql") {
+                    put("type", "string")
+                    put("description", "The SELECT SQL query to analyze")
+                }
+                putJsonObject("environment") {
+                    put("type", "string")
+                    put(
+                        "description",
+                        "The database environment to query (staging, release, production). Defaults to staging if not specified."
+                    )
+                    putJsonArray("enum") {
+                        add("staging")
+                        add("release")
+                        add("production")
+                    }
+                }
+            },
+            required = listOf("sql")
+        )
+    ) { request ->
+        val sql = request.arguments["sql"]?.jsonPrimitive?.content
+        val environment = request.arguments["environment"]?.jsonPrimitive?.content ?: "staging"
+
+        val result = if (sql != null && sql.trim().uppercase().startsWith("SELECT")) {
+            try {
+                val database = connectionManager.getConnection(environment)
+                val explainResult = database.explainQuery(sql)
+                val envInfo = " (Environment: $environment)"
+
+                "Query execution plan generated successfully!$envInfo\n\n" +
+                        formatExplainResult(explainResult, sql)
+            } catch (e: Exception) {
+                "Error analyzing query: ${e.message}"
+            }
+        } else {
+            "Only SELECT queries are allowed for EXPLAIN ANALYZE"
+        }
+
+        CallToolResult(content = listOf(TextContent(result)))
+    }
 }
 
 
-
-
 /**
- * Format query results as a simple table
+ * Format query results as a simple table with environment-aware PII protection
  */
-private fun formatQueryResult(result: QueryExecutionResult): String {
+private fun formatQueryResult(result: QueryExecutionResult, environment: String = "staging"): String {
     if (result.rows.isEmpty()) {
         return "No rows returned."
     }
@@ -363,6 +536,19 @@ private fun formatQueryResult(result: QueryExecutionResult): String {
     }
 
     return buildString {
+        // Check if PII protection should be applied for this environment
+        val shouldApplyPiiProtection = try {
+            PiiConfiguration.shouldApplyPiiProtection(environment)
+        } catch (e: Exception) {
+            false // If configuration is missing, assume disabled
+        }
+
+        // Add PII protection warning if applicable
+        if (shouldApplyPiiProtection) {
+            appendLine("🔒 PRODUCTION PII PROTECTION ACTIVE - Sensitive columns have been automatically excluded")
+            appendLine()
+        }
+
         // Header
         appendLine(columnNames.zip(columnWidths) { name, width ->
             name.padEnd(width)
@@ -376,6 +562,16 @@ private fun formatQueryResult(result: QueryExecutionResult): String {
             appendLine(columnNames.zip(columnWidths) { name, width ->
                 (row[name]?.toString() ?: "NULL").padEnd(width)
             }.joinToString(" | "))
+        }
+
+        // Add PII protection footer if applicable
+        if (shouldApplyPiiProtection) {
+            appendLine()
+            appendLine("🛡️  PRODUCTION SECURE BY DEFAULT Security Notice:")
+            appendLine("   • Only columns explicitly marked as 'non-personal' are included")
+            appendLine("   • All unmarked columns are treated as PII and automatically excluded")
+            appendLine("   • This prevents accidental exposure of unclassified sensitive data")
+            appendLine("   • PII checking is enabled for production environment")
         }
     }
 }
@@ -435,7 +631,8 @@ private fun formatTableRelationships(relationships: TableRelationshipSummary, en
         if (relationships.primaryKeys.isEmpty() &&
             relationships.foreignKeys.isEmpty() &&
             relationships.referencedBy.isEmpty() &&
-            relationships.uniqueConstraints.isEmpty()) {
+            relationships.uniqueConstraints.isEmpty()
+        ) {
             appendLine("No relationships found for this table.")
         }
     }
@@ -444,7 +641,12 @@ private fun formatTableRelationships(relationships: TableRelationshipSummary, en
 /**
  * Format table schema with relationship information
  */
-private fun formatTableSchemaWithRelationships(tableName: String, schema: List<TableColumn>, relationships: TableRelationshipSummary, envInfo: String = ""): String {
+private fun formatTableSchemaWithRelationships(
+    tableName: String,
+    schema: List<TableColumn>,
+    relationships: TableRelationshipSummary,
+    envInfo: String = ""
+): String {
     return buildString {
         appendLine("=== Schema for table '$tableName'$envInfo ===")
         appendLine()
@@ -460,7 +662,8 @@ private fun formatTableSchemaWithRelationships(tableName: String, schema: List<T
             schema.forEach { column ->
                 val pkIndicator = if (relationships.primaryKeys.any { it.columnName == column.name }) " (PK)" else ""
                 val fkIndicator = if (relationships.foreignKeys.any { it.sourceColumn == column.name }) " (FK)" else ""
-                val uniqueIndicator = if (relationships.uniqueConstraints.any { it.columnName == column.name }) " (UNIQUE)" else ""
+                val uniqueIndicator =
+                    if (relationships.uniqueConstraints.any { it.columnName == column.name }) " (UNIQUE)" else ""
                 val nullableIndicator = if (column.nullable) " NULL" else " NOT NULL"
 
                 val name = column.name.padEnd(maxNameWidth)
@@ -482,7 +685,11 @@ private fun formatTableSchemaWithRelationships(tableName: String, schema: List<T
 /**
  * Format JOIN suggestions
  */
-private fun formatJoinSuggestions(tableName: String, suggestions: List<JoinRecommendation>, envInfo: String = ""): String {
+private fun formatJoinSuggestions(
+    tableName: String,
+    suggestions: List<JoinRecommendation>,
+    envInfo: String = ""
+): String {
     return buildString {
         appendLine("=== JOIN Suggestions for table '$tableName'$envInfo ===")
         appendLine()
@@ -595,5 +802,256 @@ private fun formatDatabaseInfo(dbInfo: DatabaseInfo, environment: String): Strin
         appendLine("Driver Information:")
         appendLine("  • Driver Name: ${dbInfo.driverName}")
         appendLine("  • Driver Version: ${dbInfo.driverVersion}")
+    }
+}
+
+/**
+ * Format PII column information with secure-by-default explanation
+ */
+private fun formatPiiColumns(
+    sensitivityInfo: Map<String, ColumnSensitivityInfo>,
+    allColumns: List<String>,
+    tableName: String,
+    envInfo: String = ""
+): String {
+    return buildString {
+        appendLine("=== PII Column Analysis for table '$tableName'$envInfo ===")
+        appendLine()
+
+        // Show PII checking configuration status
+        val environment =
+            envInfo.substringAfter("Environment: ").substringBefore(")").takeIf { it.isNotEmpty() } ?: "staging"
+
+        try {
+            val shouldApplyPiiProtection = PiiConfiguration.shouldApplyPiiProtection(environment)
+
+            appendLine("🔧 PII Protection Configuration:")
+            appendLine("   • Environment: $environment")
+            appendLine("   • PII Checking: ${if (shouldApplyPiiProtection) "✅ ENABLED" else "❌ DISABLED"}")
+            appendLine()
+        } catch (e: Exception) {
+            appendLine("❌ PII Protection Configuration Error:")
+            appendLine("   • ${e.message}")
+            appendLine()
+            return@buildString
+        }
+
+        if (sensitivityInfo.isEmpty()) {
+            appendLine("⚠️  No column sensitivity information found.")
+            appendLine()
+            if (allColumns.isNotEmpty()) {
+                appendLine("🔒 SECURE BY DEFAULT: All ${allColumns.size} columns will be treated as PII in production")
+                appendLine("Unmarked columns (first 10):")
+                allColumns.take(10).forEach { columnName ->
+                    appendLine("  • $columnName (unmarked - treated as PII)")
+                }
+                if (allColumns.size > 10) {
+                    appendLine("  ... and ${allColumns.size - 10} more columns")
+                }
+                appendLine()
+            }
+            appendLine("To mark columns as safe for production queries:")
+            appendLine("COMMENT ON COLUMN $tableName.column_name IS '[{\"sensitivity\":\"internal\", \"privacy\":\"non-personal\"}]';")
+        } else {
+            val piiColumns = sensitivityInfo.filter { it.value.isPii }
+            val nonPiiColumns = sensitivityInfo.filter { !it.value.isPii }
+            val unmarkedColumns = allColumns.filter { it !in sensitivityInfo.keys }
+
+            if (nonPiiColumns.isNotEmpty()) {
+                appendLine("✅ SAFE COLUMNS (allowed in production queries):")
+                nonPiiColumns.forEach { (columnName, info) ->
+                    appendLine("  • $columnName: ${info.privacy} data (${info.sensitivity} sensitivity)")
+                }
+                appendLine()
+            }
+
+            if (piiColumns.isNotEmpty()) {
+                appendLine("🔒 MARKED PII COLUMNS (filtered in production):")
+                piiColumns.forEach { (columnName, info) ->
+                    val sensitivityLevel = if (info.isHighSensitivity) "HIGH" else "MEDIUM"
+                    appendLine("  • $columnName: ${info.privacy} data (${info.sensitivity} sensitivity - $sensitivityLevel)")
+                }
+                appendLine()
+            }
+
+            if (unmarkedColumns.isNotEmpty()) {
+                appendLine("⚠️  UNMARKED COLUMNS (treated as PII by default):")
+                unmarkedColumns.take(10).forEach { columnName ->
+                    appendLine("  • $columnName (no comment - treated as PII)")
+                }
+                if (unmarkedColumns.size > 10) {
+                    appendLine("  ... and ${unmarkedColumns.size - 10} more columns")
+                }
+                appendLine()
+            }
+
+            val totalPiiCount = piiColumns.size + unmarkedColumns.size
+            appendLine("Summary:")
+            appendLine("  • Total columns: ${allColumns.size}")
+            appendLine("  • Safe for production: ${nonPiiColumns.size}")
+            appendLine("  • Treated as PII: $totalPiiCount (${piiColumns.size} marked + ${unmarkedColumns.size} unmarked)")
+
+            appendLine()
+            appendLine("🛡️  SECURE BY DEFAULT Production Behavior:")
+            appendLine("   • Only columns explicitly marked as 'non-personal' are allowed")
+            appendLine("   • All unmarked columns are treated as PII and filtered out")
+            appendLine("   • SELECT * queries are blocked to prevent accidental exposure")
+            appendLine("   • This prevents accidental exposure of unclassified sensitive data")
+        }
+    }
+}
+
+/**
+ * Format EXPLAIN ANALYZE result for better readability using kotlinx.serialization
+ */
+private fun formatExplainResult(explainJson: String, originalQuery: String): String {
+    return buildString {
+        appendLine("=== QUERY EXECUTION PLAN ===")
+        appendLine()
+        appendLine("Original Query:")
+        appendLine(originalQuery.trim())
+        appendLine()
+        appendLine("📊 Execution Plan:")
+        appendLine("```json")
+
+        // Use kotlinx.serialization to properly format JSON
+        try {
+            val jsonElement = jsonParser.parseToJsonElement(explainJson)
+            val prettyJson = prettyJsonFormatter.encodeToString(JsonElement.serializer(), jsonElement)
+            appendLine(prettyJson)
+        } catch (e: Exception) {
+            // If JSON parsing fails, show raw output
+            appendLine(explainJson)
+        }
+
+        appendLine("```")
+        appendLine()
+
+        // Try to extract key metrics from the JSON for summary
+        try {
+            val jsonElement = jsonParser.parseToJsonElement(explainJson)
+            val summary = extractExecutionSummary(jsonElement)
+            if (summary.isNotEmpty()) {
+                appendLine("⚡ Execution Summary:")
+                summary.forEach { appendLine("  • $it") }
+                appendLine()
+            }
+        } catch (e: Exception) {
+            // If parsing fails, skip summary
+        }
+
+        appendLine("💡 Key Metrics to Look For:")
+        appendLine("  • 'Actual Total Time' - Real execution time in milliseconds")
+        appendLine("  • 'Actual Rows' vs 'Plan Rows' - Estimation accuracy")
+        appendLine("  • 'Shared Hit Blocks' - Data found in memory cache")
+        appendLine("  • 'Shared Read Blocks' - Data read from disk")
+        appendLine("  • 'Node Type' - Operations like Seq Scan, Index Scan, etc.")
+        appendLine("  • 'Startup Cost' vs 'Total Cost' - Query cost estimates")
+        appendLine()
+        appendLine("🔍 Performance Tips:")
+        appendLine("  • High 'Shared Read Blocks' may indicate missing indexes")
+        appendLine("  • 'Seq Scan' on large tables suggests index optimization needed")
+        appendLine("  • Large difference between 'Plan Rows' and 'Actual Rows' indicates outdated statistics")
+        appendLine("  • Consider running ANALYZE on tables with poor estimates")
+    }
+}
+
+/**
+ * Extract key execution metrics from EXPLAIN JSON for summary
+ */
+private fun extractExecutionSummary(jsonElement: JsonElement): List<String> {
+    val summary = mutableListOf<String>()
+
+    try {
+        // Handle array of plans (typical EXPLAIN output format)
+        val plans = if (jsonElement is JsonArray) {
+            jsonElement
+        } else {
+            // Handle single plan object
+            JsonArray(listOf(jsonElement))
+        }
+
+        plans.forEach { planElement ->
+            if (planElement is JsonObject) {
+                val plan = planElement["Plan"]?.jsonObject
+                if (plan != null) {
+                    extractPlanSummary(plan, summary)
+                }
+            }
+        }
+    } catch (e: Exception) {
+        // If extraction fails, return empty summary
+    }
+
+    return summary
+}
+
+/**
+ * Extract summary information from a single plan node
+ */
+private fun extractPlanSummary(plan: JsonObject, summary: MutableList<String>) {
+    try {
+        val nodeType = plan["Node Type"]?.jsonPrimitive?.content
+        val actualTime = plan["Actual Total Time"]?.jsonPrimitive?.doubleOrNull
+        val actualRows = plan["Actual Rows"]?.jsonPrimitive?.longOrNull
+        val planRows = plan["Plan Rows"]?.jsonPrimitive?.longOrNull
+        val relationName = plan["Relation Name"]?.jsonPrimitive?.content
+        val indexName = plan["Index Name"]?.jsonPrimitive?.content
+        val sharedHitBlocks = plan["Shared Hit Blocks"]?.jsonPrimitive?.longOrNull
+        val sharedReadBlocks = plan["Shared Read Blocks"]?.jsonPrimitive?.longOrNull
+
+        // Build summary line
+        val parts = mutableListOf<String>()
+
+        if (nodeType != null) {
+            parts.add(nodeType)
+        }
+
+        if (relationName != null) {
+            parts.add("on $relationName")
+        }
+
+        if (indexName != null) {
+            parts.add("using $indexName")
+        }
+
+        if (actualTime != null) {
+            parts.add("${String.format("%.3f", actualTime)}ms")
+        }
+
+        if (actualRows != null && planRows != null) {
+            val accuracy = if (planRows > 0) {
+                val ratio = actualRows.toDouble() / planRows.toDouble()
+                when {
+                    ratio > 10 -> "⚠️ overestimated"
+                    ratio < 0.1 -> "⚠️ underestimated"
+                    else -> "✅ accurate"
+                }
+            } else "unknown"
+            parts.add("$actualRows rows ($accuracy)")
+        }
+
+        if (sharedHitBlocks != null && sharedReadBlocks != null) {
+            val totalBlocks = sharedHitBlocks + sharedReadBlocks
+            if (totalBlocks > 0) {
+                val cacheHitRatio = (sharedHitBlocks.toDouble() / totalBlocks.toDouble() * 100).toInt()
+                parts.add("${cacheHitRatio}% cache hit")
+            }
+        }
+
+        if (parts.isNotEmpty()) {
+            summary.add(parts.joinToString(" - "))
+        }
+
+        // Recursively process child plans
+        val plans = plan["Plans"]?.jsonArray
+        plans?.forEach { childPlan ->
+            if (childPlan is JsonObject) {
+                extractPlanSummary(childPlan, summary)
+            }
+        }
+
+    } catch (e: Exception) {
+        // If extraction fails for this plan, continue with others
     }
 }
