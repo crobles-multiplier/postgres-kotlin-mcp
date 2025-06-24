@@ -26,9 +26,7 @@ A Model Context Protocol (MCP) server that provides tools to interact with Postg
 | `postgres_query` | Execute SELECT queries against the database | `sql` (string) | `environment` (staging/release/production) | Query results in table format |
 | `postgres_list_tables` | List all tables in the database | None | `environment` (staging/release/production) | List of table names |
 | `postgres_get_table_schema` | Get detailed schema information for a table | `table_name` (string) | `environment` (staging/release/production) | Column details with data types, constraints, and relationship indicators |
-| `postgres_get_relationships` | Get table relationships (FK, PK, constraints) | `table_name` (string) | `environment` (staging/release/production) | Primary keys, foreign keys, referenced by, unique constraints |
 | `postgres_suggest_joins` | Suggest JOIN queries based on relationships | `table_name` (string) | `environment` (staging/release/production) | Suggested JOIN conditions and example queries |
-| `postgres_get_database_info` | Get database name and connection information | None | `environment` (staging/release/production) | Database name, version, driver info, and connection details |
 | `postgres_connection_stats` | Get connection pool statistics and health info | None | None | HikariCP pool status, metrics, and health information |
 | `postgres_get_pii_columns` | Get PII column information based on database comments | `table_name` (string) | `environment` (staging/release/production) | List of PII and non-PII columns with sensitivity levels |
 | `postgres_explain_query` | Get PostgreSQL query execution plan with performance analysis | `sql` (string) | `environment` (staging/release/production) | Detailed execution plan with timing, costs, and optimization insights |
@@ -323,10 +321,7 @@ This server is built using:
 - *"What tables are in the production database?"*
 - *"Query the staging database for user statistics"*
 - *"Show me the schema for the orders table in release environment"*
-- *"Get relationships for the users table in staging"*
-
 ### Relationship Discovery
-- *"What are the relationships for the orders table?"*
 - *"Show me all foreign keys in the customers table"*
 - *"What tables reference the users table?"*
 - *"What JOIN queries can I write with the orders table?"*

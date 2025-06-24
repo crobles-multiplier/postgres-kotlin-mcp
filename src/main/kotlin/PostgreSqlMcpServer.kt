@@ -238,50 +238,7 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
 
         CallToolResult(content = listOf(TextContent(result)))
     }
-    // Register postgres_get_relationships tool
-    server.addTool(
-        name = "postgres_get_relationships",
-        description = "Get table relationships including foreign keys, primary keys, and constraints",
-        inputSchema = Tool.Input(
-            properties = buildJsonObject {
-                putJsonObject("table_name") {
-                    put("type", "string")
-                    put("description", "Name of the table to get relationships for")
-                }
-                putJsonObject("environment") {
-                    put("type", "string")
-                    put(
-                        "description",
-                        "The database environment to query (staging, release, production). Defaults to staging if not specified."
-                    )
-                    putJsonArray("enum") {
-                        add("staging")
-                        add("release")
-                        add("production")
-                    }
-                }
-            },
-            required = listOf("table_name")
-        )
-    ) { request ->
-        val tableName = request.arguments["table_name"]?.jsonPrimitive?.content
-        val environment = request.arguments["environment"]?.jsonPrimitive?.content
 
-        val result = if (tableName != null) {
-            try {
-                val database = connectionManager.getConnection(environment)
-                val relationships = database.getTableRelationships(tableName)
-                val envInfo = if (environment != null) " (Environment: $environment)" else ""
-                formatTableRelationships(relationships, envInfo)
-            } catch (e: Exception) {
-                "Error getting relationships for table '$tableName': ${e.message}"
-            }
-        } else {
-            "Table name is required"
-        }
-
-        CallToolResult(content = listOf(TextContent(result)))
-    }
 
     // Register postgres_get_table_schema tool
     server.addTool(
@@ -376,38 +333,7 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
 
 
 
-    // Register postgres_get_database_info tool
-    server.addTool(
-        name = "postgres_get_database_info",
-        description = "Get database name and connection information",
-        inputSchema = Tool.Input(
-            properties = buildJsonObject {
-                putJsonObject("environment") {
-                    put("type", "string")
-                    put(
-                        "description",
-                        "The database environment to query (staging, release, production). Defaults to staging if not specified."
-                    )
-                    putJsonArray("enum") {
-                        add("staging")
-                        add("release")
-                        add("production")
-                    }
-                }
-            }
-        )
-    ) { request ->
-        val result = try {
-            val environment = request.arguments["environment"]?.jsonPrimitive?.content
-            val repository = connectionManager.getConnection(environment)
-            val dbInfo = repository.getDatabaseInfo()
-            formatDatabaseInfo(dbInfo, environment ?: "staging")
-        } catch (e: Exception) {
-            "Error getting database info: ${e.message}"
-        }
 
-        CallToolResult(content = listOf(TextContent(result)))
-    }
 
     // Register postgres_connection_stats tool
     server.addTool(
@@ -786,28 +712,7 @@ private fun formatConnectionStats(stats: Map<String, Any>): String {
     }
 }
 
-/**
- * Format database information
- */
-private fun formatDatabaseInfo(dbInfo: DatabaseInfo, environment: String): String {
-    return buildString {
-        appendLine("=== Database Information ===")
-        appendLine()
-        appendLine("Database Details:")
-        appendLine("  • Database Name: ${dbInfo.databaseName}")
-        appendLine("  • Database Product: ${dbInfo.databaseProduct}")
-        appendLine("  • Database Version: ${dbInfo.databaseVersion}")
-        appendLine()
-        appendLine("Connection Details:")
-        appendLine("  • Environment: $environment")
-        appendLine("  • Connection URL: ${dbInfo.url}")
-        appendLine("  • Username: ${dbInfo.username}")
-        appendLine()
-        appendLine("Driver Information:")
-        appendLine("  • Driver Name: ${dbInfo.driverName}")
-        appendLine("  • Driver Version: ${dbInfo.driverVersion}")
-    }
-}
+
 
 /**
  * Format PII column information with secure-by-default explanation
