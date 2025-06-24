@@ -38,7 +38,6 @@ A Model Context Protocol (MCP) server that provides tools to interact with Postg
 - **🛡️ SQL Injection Protection**: Uses parameterized queries where possible
 - **📏 Row Limiting**: Configurable limits prevent overwhelming responses
 - **✅ Connection Validation**: Built-in connection testing and validation
-- **🔐 PII Protection**: Automatic PII filtering in production environment based on database column comments
 
 ## Configuration
 
@@ -75,10 +74,6 @@ hikari.release.minimum-idle=2
 
 hikari.production.maximum-pool-size=15
 hikari.production.minimum-idle=3
-
-# PII Protection Configuration (Production Only)
-# REQUIRED: Set to true to enable PII filtering in production, false to disable
-pii.checking.production.enabled=true
 ```
 
 ### Environment Variables Setup
@@ -118,66 +113,24 @@ environment:
   - POSTGRES_STAGING_PASSWORD=your_staging_password
 ```
 
-## PII Protection
+## PII Column Detection
 
-This MCP server includes automatic PII (Personally Identifiable Information) protection for production environments:
+This MCP server includes a tool to detect and analyze PII (Personally Identifiable Information) columns based on existing database column comments:
 
 ### How It Works
-- **Database-Driven Detection**: Uses PostgreSQL column comments with JSON format to identify safe columns
-- **Secure by Default**: Only columns explicitly marked as `"privacy":"non-personal"` are allowed in production
-- **Production-Only Filtering**: PII protection is only active in production environment
-- **Unmarked Column Protection**: Any column without explicit comments is treated as PII and filtered out
-- **SELECT * Protection**: `SELECT *` queries are blocked in production to prevent accidental PII exposure
+- **Read-Only Analysis**: The `postgres_get_pii_columns` tool reads existing column metadata from database comments
+- **JSON Comment Detection**: Analyzes PostgreSQL column comments that contain JSON sensitivity information
+- **Flexible Format Support**: Supports both JSON array and object formats in existing column comments
 
-### Column Comment Format
-Mark columns as PII using JSON comments in your database. Both array and object formats are supported:
+### Using PII Detection
+1. **Query column information**: Use `postgres_get_pii_columns` tool to analyze table columns
+2. **Review results**: See which columns are marked as PII vs non-PII based on existing comments
+3. **Compliance support**: Use for data auditing and classification purposes
 
-```sql
--- Mark a column as containing personal information (array format)
-COMMENT ON COLUMN users.email IS '[{"sensitivity":"internal", "privacy":"personal"}]';
-COMMENT ON COLUMN users.phone_number IS '[{"sensitivity":"restricted", "privacy":"personal"}]';
-
--- Mark a column as non-personal (object format)
-COMMENT ON COLUMN users.user_id IS '{"sensitivity":"internal", "privacy":"non-personal"}';
-
--- Both formats work - use whichever is more convenient
-COMMENT ON COLUMN users.created_at IS '{"sensitivity":"public", "privacy":"non-personal"}';
-```
-
-### Sensitivity Levels
-- **Privacy**: `personal` (PII) or `non-personal` (safe)
-- **Sensitivity**: `public`, `internal`, `restricted`, `confidential`
-
-### Production Behavior (Secure by Default)
-- ✅ **Staging/Release**: All columns accessible, no PII filtering applied
-- 🔒 **Production with PII Enabled**: Only columns explicitly marked as `"privacy":"non-personal"` are accessible
-- ⚠️ **Unmarked Columns**: Treated as PII and automatically excluded (secure by default)
-- ❌ **SELECT * Blocked**: Must specify explicit column names when PII checking is enabled
-- 🛡️ **Permission Safe**: Avoids permission errors by not querying PII columns
-- ⚙️ **Configurable**: PII checking can be disabled in production if needed
-
-### Configuring PII Protection (Production Only)
-
-PII protection is exclusively for production environment and must be explicitly configured in `database.properties`:
-
-```properties
-# REQUIRED: PII Protection Configuration for Production
-pii.checking.production.enabled=true   # Enable PII protection
-# OR
-pii.checking.production.enabled=false  # Disable PII protection (not recommended)
-```
-
-**Configuration Requirements:**
-- **Production Only**: PII checking only applies to production environment
-- **Required Setting**: `pii.checking.production.enabled` must be explicitly set to `true` or `false`
-- **No Defaults**: Configuration is required - server will fail if not specified
-- **Staging/Release**: PII checking is never applied to non-production environments
-
-### Using PII Protection
-1. **Configure**: Set `pii.checking.production.enabled=true` in database.properties
-2. **Check PII columns**: Use `postgres_get_pii_columns` tool to see which columns are marked as PII
-3. **Query safely**: In production with PII checking enabled, only non-PII columns will be returned
-4. **Explicit columns**: Always specify column names in production (no `SELECT *`)
+### Example Usage
+- *"Show me which columns in the users table contain PII"*
+- *"What's the sensitivity level of columns in the orders table?"*
+- *"List all non-personal columns in the customers table"*
 
 ## Building
 
