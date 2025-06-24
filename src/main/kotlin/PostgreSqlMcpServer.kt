@@ -374,6 +374,8 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
         CallToolResult(content = listOf(TextContent(result)))
     }
 
+
+
     // Register postgres_get_database_info tool
     server.addTool(
         name = "postgres_get_database_info",
@@ -717,6 +719,8 @@ private fun formatJoinSuggestions(
         }
     }
 }
+
+
 
 /**
  * Format HikariCP connection statistics for monitoring

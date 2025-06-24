@@ -331,6 +331,7 @@ This server is built using:
 - *"What tables reference the users table?"*
 - *"What JOIN queries can I write with the orders table?"*
 
+
 ### Advanced Schema Analysis
 - *"Show me the complete schema with relationships for the products table"*
 - *"What are the primary keys and foreign keys for all my tables?"*
