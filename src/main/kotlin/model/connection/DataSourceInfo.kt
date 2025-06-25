@@ -2,6 +2,7 @@ package model.connection
 
 import PostgreSqlRepository
 import com.zaxxer.hikari.HikariDataSource
+import model.Environment
 import java.time.Instant
 
 /**
@@ -11,13 +12,13 @@ import java.time.Instant
  * including the HikariCP data source, environment identifier, repository instance, and usage tracking.
  *
  * @property dataSource HikariCP data source for database connections
- * @property environment Environment identifier (e.g., "staging", "release", "production")
+ * @property environment Environment enum identifier
  * @property repository PostgreSQL repository instance associated with this data source
  * @property lastUsed Timestamp of when this data source was last accessed
  */
 data class DataSourceInfo(
     val dataSource: HikariDataSource,
-    val environment: String,
+    val environment: Environment,
     val repository: PostgreSqlRepository,
     val lastUsed: Instant = Instant.now()
 )

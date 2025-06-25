@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import model.Environment
 import model.database.DatabaseInfo
 import model.database.DatabaseTable
 import model.database.TableColumn
@@ -72,7 +73,7 @@ class PostgreSqlRepository {
             DriverManager.getConnection(jdbcUrl!!)
         }
     }
-    
+
     /**
      * Execute a query and return results as a list of maps
      */
@@ -80,16 +81,16 @@ class PostgreSqlRepository {
         var connection: Connection? = null
         var statement: Statement? = null
         var resultSet: ResultSet? = null
-        
+
         try {
             connection = getConnection()
             statement = connection.createStatement()
             statement.maxRows = maxRows
-            
+
             val startTime = System.currentTimeMillis()
             resultSet = statement.executeQuery(sql)
             val executionTime = System.currentTimeMillis() - startTime
-            
+
             val metaData = resultSet.metaData
             val columnCount = metaData.columnCount
             val columns = (1..columnCount).map { i ->
@@ -99,7 +100,7 @@ class PostgreSqlRepository {
                     nullable = metaData.isNullable(i) == ResultSetMetaData.columnNullable
                 )
             }
-            
+
             val rows = mutableListOf<Map<String, Any?>>()
             while (resultSet.next() && rows.size < maxRows) {
                 val row = mutableMapOf<String, Any?>()
@@ -109,7 +110,7 @@ class PostgreSqlRepository {
                 }
                 rows.add(row)
             }
-            
+
             QueryExecutionResult(
                 columns = columns,
                 rows = rows,
@@ -125,18 +126,18 @@ class PostgreSqlRepository {
             connection?.close()
         }
     }
-    
+
     /**
      * Get table schema information
      */
     suspend fun getTableSchema(tableName: String): List<TableColumn> = withContext(Dispatchers.IO) {
         var connection: Connection? = null
-        
+
         try {
             connection = getConnection()
             val metaData = connection.metaData
             val resultSet = metaData.getColumns(null, null, tableName, null)
-            
+
             val columns = mutableListOf<TableColumn>()
             while (resultSet.next()) {
                 columns.add(
@@ -156,18 +157,18 @@ class PostgreSqlRepository {
             connection?.close()
         }
     }
-    
+
     /**
      * List all tables in the database
      */
     suspend fun listTables(): List<DatabaseTable> = withContext(Dispatchers.IO) {
         var connection: Connection? = null
-        
+
         try {
             connection = getConnection()
             val metaData = connection.metaData
             val resultSet = metaData.getTables(null, null, null, arrayOf("TABLE"))
-            
+
             val tables = mutableListOf<DatabaseTable>()
             while (resultSet.next()) {
                 tables.add(
@@ -185,7 +186,7 @@ class PostgreSqlRepository {
             connection?.close()
         }
     }
-    
+
     /**
      * Get query execution plan
      */
@@ -193,14 +194,14 @@ class PostgreSqlRepository {
         var connection: Connection? = null
         var statement: Statement? = null
         var resultSet: ResultSet? = null
-        
+
         try {
             connection = getConnection()
             statement = connection.createStatement()
 
             val explainSql = "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) $sql"
             resultSet = statement.executeQuery(explainSql)
-            
+
             val plans = mutableListOf<String>()
             while (resultSet.next()) {
                 plans.add(resultSet.getString(1))
@@ -214,7 +215,7 @@ class PostgreSqlRepository {
             connection?.close()
         }
     }
-    
+
     /**
      * Get foreign key relationships for a specific table
      */
@@ -494,21 +495,21 @@ class PostgreSqlRepository {
     }
 
 
-
     /**
      * Get column comments and sensitivity information for a table
      */
-    suspend fun getColumnSensitivityInfo(tableName: String): Map<String, ColumnSensitivityInfo> = withContext(Dispatchers.IO) {
-        var connection: Connection? = null
-        var preparedStatement: java.sql.PreparedStatement? = null
-        var resultSet: ResultSet? = null
+    suspend fun getColumnSensitivityInfo(tableName: String): Map<String, ColumnSensitivityInfo> =
+        withContext(Dispatchers.IO) {
+            var connection: Connection? = null
+            var preparedStatement: java.sql.PreparedStatement? = null
+            var resultSet: ResultSet? = null
 
-        try {
-            connection = getConnection()
+            try {
+                connection = getConnection()
 
-            // Query to get column comments from PostgreSQL system tables
-            // This query works across all schemas by not filtering on schema name
-            val sql = """
+                // Query to get column comments from PostgreSQL system tables
+                // This query works across all schemas by not filtering on schema name
+                val sql = """
                 SELECT
                     c.table_schema,
                     c.column_name,
@@ -521,33 +522,33 @@ class PostgreSqlRepository {
                 ORDER BY c.table_schema, c.ordinal_position
             """.trimIndent()
 
-            preparedStatement = connection.prepareStatement(sql)
-            preparedStatement.setString(1, tableName)
-            resultSet = preparedStatement.executeQuery()
+                preparedStatement = connection.prepareStatement(sql)
+                preparedStatement.setString(1, tableName)
+                resultSet = preparedStatement.executeQuery()
 
-            val sensitivityMap = mutableMapOf<String, ColumnSensitivityInfo>()
+                val sensitivityMap = mutableMapOf<String, ColumnSensitivityInfo>()
 
-            while (resultSet.next()) {
-                val columnName = resultSet.getString("column_name")
-                val comment = resultSet.getString("column_comment")
-                val sensitivityInfo = parseColumnSensitivity(comment)
+                while (resultSet.next()) {
+                    val columnName = resultSet.getString("column_name")
+                    val comment = resultSet.getString("column_comment")
+                    val sensitivityInfo = parseColumnSensitivity(comment)
 
-                if (sensitivityInfo != null) {
-                    sensitivityMap[columnName] = sensitivityInfo
+                    if (sensitivityInfo != null) {
+                        sensitivityMap[columnName] = sensitivityInfo
+                    }
                 }
-            }
 
-            sensitivityMap
-        } catch (e: SQLException) {
-            // If we can't access column comments (permission issue), return empty map
-            System.err.println("Warning: Cannot access column comments for PII detection: ${e.message}")
-            emptyMap()
-        } finally {
-            resultSet?.close()
-            preparedStatement?.close()
-            connection?.close()
+                sensitivityMap
+            } catch (e: SQLException) {
+                // If we can't access column comments (permission issue), return empty map
+                System.err.println("Warning: Cannot access column comments for PII detection: ${e.message}")
+                emptyMap()
+            } finally {
+                resultSet?.close()
+                preparedStatement?.close()
+                connection?.close()
+            }
         }
-    }
 
     /**
      * Parse JSON comment to extract sensitivity information using kotlinx.serialization
@@ -564,10 +565,12 @@ class PostgreSqlRepository {
                     // Handle array format: [{"sensitivity":"internal", "privacy":"personal"}]
                     if (jsonElement.isNotEmpty()) jsonElement[0].jsonObject else null
                 }
+
                 is JsonObject -> {
                     // Handle direct object format: {"sensitivity":"internal", "privacy":"personal"}
                     jsonElement
                 }
+
                 else -> null
             }
 
@@ -585,15 +588,19 @@ class PostgreSqlRepository {
     /**
      * Execute a query with PII filtering for production environment only
      */
-    suspend fun executeQueryWithPiiFiltering(sql: String, maxRows: Int = 100, environment: String = "staging"): QueryExecutionResult = withContext(Dispatchers.IO) {
+    suspend fun executeQueryWithPiiFiltering(
+        sql: String,
+        maxRows: Int = 100,
+        environment: Environment = Environment.getDefault()
+    ): QueryExecutionResult = withContext(Dispatchers.IO) {
         // PII checking is only applicable to production environment
-        if (environment.lowercase() != "production") {
+        if (environment != Environment.PRODUCTION) {
             return@withContext executeQuery(sql, maxRows)
         }
 
         // Check if PII protection should be applied for this environment
         val shouldApplyPiiProtection = try {
-            PiiConfiguration.shouldApplyPiiProtection(environment)
+            PiiConfiguration.shouldApplyPiiProtection(environment.value)
         } catch (e: Exception) {
             // Re-throw configuration errors with context
             throw IllegalStateException("Production PII configuration error: ${e.message}", e)

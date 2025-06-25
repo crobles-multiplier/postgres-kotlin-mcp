@@ -30,12 +30,63 @@ A Model Context Protocol (MCP) server that provides tools to interact with Postg
 | `postgres_connection_stats` | Get connection pool statistics and health info | None | None | HikariCP pool status, metrics, and health information |
 | `postgres_get_pii_columns` | Get PII column information based on database comments | `table_name` (string) | `environment` (staging/release/production) | List of PII and non-PII columns with sensitivity levels |
 | `postgres_explain_query` | Get PostgreSQL query execution plan with performance analysis | `sql` (string) | `environment` (staging/release/production) | Detailed execution plan with timing, costs, and optimization insights |
+| `postgres_reconnect_database` | Reconnect to database(s) - useful when VPN connection is restored | None | `environment` (staging/release/production), `test_connection` (boolean) | Reconnection status and results for specified or all environments |
 
 ### Safety Features
 - **🔒 Read-Only Access**: Only SELECT queries are permitted
 - **🛡️ SQL Injection Protection**: Uses parameterized queries where possible
 - **📏 Row Limiting**: Configurable limits prevent overwhelming responses
 - **✅ Connection Validation**: Built-in connection testing and validation
+- **🔄 Automatic Reconnection**: Smart reconnection handling for VPN and network issues
+
+## Database Reconnection & Startup Resilience
+
+### Graceful Startup
+The MCP server now starts successfully **even when no database connections can be established initially**. This is particularly useful for VPN-dependent environments where:
+- VPN might not be connected at startup
+- Database servers might be temporarily unavailable
+- Network connectivity issues exist
+
+**Previous Behavior**: Server would fail to start if no connections could be established
+**New Behavior**: Server starts with a warning and provides reconnection tools
+
+### Reconnection Tool
+The `postgres_reconnect_database` tool provides robust reconnection capabilities for handling VPN disconnections and network issues:
+
+#### Features
+- **Smart Health Checking**: Tests connection health before attempting reconnection
+- **Selective Reconnection**: Reconnect specific environments or all environments
+- **Detailed Status Reporting**: Comprehensive feedback on reconnection attempts
+- **VPN-Aware**: Designed specifically for VPN connection scenarios
+- **Graceful Error Handling**: Helpful error messages guide users to reconnection tools
+
+#### Usage Examples
+- *"Reconnect to the database"* - Reconnects all environments with health checking
+- *"Reconnect to production database"* - Reconnects only production environment
+- *"Force reconnect all databases without testing"* - Bypasses health check and reconnects all
+- *"Test and reconnect staging database"* - Tests staging connection health and reconnects if needed
+- *"Check connection status"* - Use `postgres_connection_stats` to see current status
+
+#### When to Use
+- After VPN reconnection
+- When experiencing database connectivity issues
+- After network interruptions
+- When connection pools show unhealthy status
+- Before critical database operations
+- When MCP server started without valid connections
+
+#### Parameters
+- `environment` (optional): Specific environment to reconnect (staging/release/production)
+- `test_connection` (optional): Whether to test connection health first (default: true)
+
+If no environment is specified, the tool will check and reconnect all configured environments as needed.
+
+#### Startup Workflow
+1. **Server Starts**: MCP server starts regardless of database connectivity
+2. **Warning Displayed**: If no connections available, shows helpful warning message
+3. **Tools Available**: All MCP tools are registered and ready to use
+4. **Reconnection**: Use `postgres_reconnect_database` when ready to connect
+5. **Normal Operation**: Once connected, all database tools work normally
 
 ## Configuration
 
@@ -365,20 +416,38 @@ postgres-mcp-tool/
 
 ### Common Issues
 
-1. **Connection Failed**:
+1. **No Database Connections at Startup**:
+   - **New Behavior**: Server starts successfully with a warning message
+   - Use `postgres_reconnect_database` tool to establish connections when ready
+   - Common causes: VPN not connected, database servers unavailable, network issues
+
+2. **Connection Failed During Operation**:
+   - Use `postgres_connection_stats` to check current connection status
+   - Use `postgres_reconnect_database` to restore connections
    - Check that all required environment variables are set
    - Verify JDBC URL format: `jdbc:postgresql://host:port/database`
    - Ensure database credentials are correct
-2. **Environment Variables Not Found**:
+
+3. **VPN Connection Issues**:
+   - Connect VPN first, then use `postgres_reconnect_database`
+   - Server will start without VPN and allow reconnection later
+   - Use connection health checking to verify VPN connectivity
+
+4. **Environment Variables Not Found**:
    - Verify environment variables are exported in your shell
    - For AI agents, ensure environment variables are available to the Java process
-3. **Permission Denied**: Ensure the database user has SELECT permissions
-4. **Tool Not Showing**: Verify the JAR path in your AI agent's MCP configuration
-5. **Java Not Found**: Ensure Java 17+ is installed and in your PATH
-6. **Build Failed - Missing jarSuffix**:
+
+5. **Permission Denied**: Ensure the database user has SELECT permissions
+
+6. **Tool Not Showing**: Verify the JAR path in your AI agent's MCP configuration
+
+7. **Java Not Found**: Ensure Java 17+ is installed and in your PATH
+
+8. **Build Failed - Missing jarSuffix**:
    - Use `./gradlew shadowJar -PjarSuffix=<database-name>` instead of `./gradlew shadowJar`
    - The jarSuffix parameter is required to create descriptive JAR names
-7. **Wrong Database Connection**:
+
+9. **Wrong Database Connection**:
    - Verify you're using the correct JAR file for the intended database system
    - Check the JAR filename matches your database system (e.g., `postgres-mcp-tool-incidents.jar` for incidents database)
 

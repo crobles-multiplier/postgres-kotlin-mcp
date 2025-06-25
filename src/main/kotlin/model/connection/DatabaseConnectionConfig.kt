@@ -1,5 +1,7 @@
 package model.connection
 
+import model.Environment
+
 /**
  * Data Transfer Object for database connection configuration
  *
@@ -14,7 +16,7 @@ data class DatabaseConnectionConfig(
     val jdbcUrl: String,
     val username: String,
     val password: String,
-    val environment: String
+    val environment: Environment
 ) {
 
     init {
@@ -42,12 +44,7 @@ data class DatabaseConnectionConfig(
             "Password cannot be blank for environment '$environment'"
         }
 
-        require(environment.isNotBlank()) {
-            "Environment cannot be blank"
-        }
-
-        // Validate environment is supported
-        EnvironmentManager.validateEnvironment(environment)
+        // Environment is already validated by the enum type - no need for additional validation
 
         // Validate JDBC URL format
         validateJdbcUrl()
@@ -102,27 +99,9 @@ data class DatabaseConnectionConfig(
             ?: throw IllegalStateException("Could not extract database name from JDBC URL: $jdbcUrl")
     }
     
-    /**
-     * Gets connection parameters from the JDBC URL (if any)
-     */
-    fun getConnectionParameters(): Map<String, String> {
-        val regex = Regex("jdbc:postgresql://[^?]+\\?(.+)")
-        val paramString = regex.find(jdbcUrl)?.groupValues?.get(1) ?: return emptyMap()
-        
-        return paramString.split("&")
-            .mapNotNull { param ->
-                val parts = param.split("=", limit = 2)
-                if (parts.size == 2) parts[0] to parts[1] else null
-            }
-            .toMap()
-    }
+
     
-    /**
-     * Creates a masked version for logging (hides password)
-     */
-    fun toMaskedString(): String {
-        return "DatabaseConnectionConfig(jdbcUrl='$jdbcUrl', username='$username', password='***', environment='$environment')"
-    }
+
 
     companion object {
 
@@ -132,7 +111,7 @@ data class DatabaseConnectionConfig(
          * @param jdbcUrl The JDBC URL for the database connection
          * @param username The database username
          * @param password The database password
-         * @param environment The environment name
+         * @param environment The environment enum
          * @return A validated DatabaseConnectionConfig instance
          * @throws IllegalArgumentException if any required property is missing or invalid
          */
@@ -140,35 +119,35 @@ data class DatabaseConnectionConfig(
             jdbcUrl: String?,
             username: String?,
             password: String?,
-            environment: String
+            environment: Environment
         ): DatabaseConnectionConfig {
 
             val validationErrors = mutableListOf<String>()
 
             if (jdbcUrl.isNullOrBlank()) {
-                validationErrors.add("JDBC URL is required for environment '$environment'")
+                validationErrors.add("JDBC URL is required for environment '${environment.value}'")
             }
 
             if (username.isNullOrBlank()) {
-                validationErrors.add("Username is required for environment '$environment'")
+                validationErrors.add("Username is required for environment '${environment.value}'")
             }
 
             if (password.isNullOrBlank()) {
-                validationErrors.add("Password is required for environment '$environment'")
+                validationErrors.add("Password is required for environment '${environment.value}'")
             }
 
             if (validationErrors.isNotEmpty()) {
-                val envUpper = environment.uppercase()
+                val envUpper = environment.value.uppercase()
                 throw IllegalArgumentException("""
-                    Missing required database connection properties for environment '$environment':
+                    Missing required database connection properties for environment '${environment.value}':
                     ${validationErrors.joinToString("\n") { "  - $it" }}
 
-                    Required database connection properties for environment '$environment':
+                    Required database connection properties for environment '${environment.value}':
 
                     Properties in database.properties:
-                    - database.${environment.lowercase()}.jdbc-url=${'$'}{POSTGRES_${envUpper}_JDBC_URL}
-                    - database.${environment.lowercase()}.username=${'$'}{POSTGRES_${envUpper}_USERNAME}
-                    - database.${environment.lowercase()}.password=${'$'}{POSTGRES_${envUpper}_PASSWORD}
+                    - database.${environment.value.lowercase()}.jdbc-url=${'$'}{POSTGRES_${envUpper}_JDBC_URL}
+                    - database.${environment.value.lowercase()}.username=${'$'}{POSTGRES_${envUpper}_USERNAME}
+                    - database.${environment.value.lowercase()}.password=${'$'}{POSTGRES_${envUpper}_PASSWORD}
 
                     Environment variables to set:
                     - export POSTGRES_${envUpper}_JDBC_URL="jdbc:postgresql://host:port/database"
@@ -190,40 +169,14 @@ data class DatabaseConnectionConfig(
          *
          * Uses EnvironmentManager to retrieve environment-specific configuration.
          *
-         * @param environment The environment name
+         * @param environment The environment enum
          * @return DatabaseConnectionConfig for the environment
          * @throws IllegalArgumentException if the environment is not supported or not fully configured
          */
-        fun forEnvironment(environment: String): DatabaseConnectionConfig {
+        fun forEnvironment(environment: Environment): DatabaseConnectionConfig {
             return EnvironmentManager.createConnectionConfig(environment)
         }
 
-        /**
-         * Check if environment has complete database configuration
-         *
-         * @param environment The environment name to check
-         * @return true if all required properties are configured, false otherwise
-         */
-        fun hasCompleteConfiguration(environment: String): Boolean {
-            return EnvironmentManager.hasCompleteConfiguration(environment)
-        }
 
-        /**
-         * Get all available environments that have complete configuration
-         *
-         * @return List of environment names with complete configuration
-         */
-        fun getAvailableEnvironments(): List<String> {
-            return EnvironmentManager.getAvailableEnvironments()
-        }
-
-        /**
-         * Get database configuration for all available environments
-         *
-         * @return Map of environment names to their DatabaseConnectionConfig
-         */
-        fun getAllConfigs(): Map<String, DatabaseConnectionConfig> {
-            return EnvironmentManager.getAllConfigurations()
-        }
     }
 }

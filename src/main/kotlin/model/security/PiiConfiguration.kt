@@ -1,7 +1,7 @@
 package model.security
 
+import model.Environment
 import model.connection.ConfigurationLoader
-import model.connection.EnvironmentManager
 
 /**
  * Configuration manager for PII (Personally Identifiable Information) handling
@@ -27,7 +27,8 @@ object PiiConfiguration {
      * @throws IllegalArgumentException if the configuration value is invalid
      */
     fun shouldApplyPiiProtection(environment: String): Boolean {
-        if (!EnvironmentManager.isProduction(environment)) {
+        val envEnum = Environment.fromString(environment)
+        if (envEnum != Environment.PRODUCTION) {
             return false
         }
 

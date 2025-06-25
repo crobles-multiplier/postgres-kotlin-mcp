@@ -27,7 +27,8 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
-import model.database.DatabaseInfo
+import model.Environment
+import model.connection.ReconnectionResult
 import model.database.TableColumn
 import model.query.QueryExecutionResult
 import model.relationship.JoinRecommendation
@@ -41,6 +42,15 @@ private val prettyJsonFormatter = Json {
     prettyPrint = true
     prettyPrintIndent = "  "
     ignoreUnknownKeys = true
+}
+
+/**
+ * Utility function to add environment enum array to JSON object builder
+ */
+private fun kotlinx.serialization.json.JsonObjectBuilder.addEnvironmentEnumArray() {
+    putJsonArray("enum") {
+        Environment.getSupportedEnvironments().forEach { add(it) }
+    }
 }
 
 /**
@@ -143,20 +153,23 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
                     put("type", "string")
                     put(
                         "description",
-                        "The database environment to query (staging, release, production). Defaults to staging if not specified."
+                        "The database environment to query (${
+                            Environment.getSupportedEnvironments().joinToString(", ")
+                        }). Defaults to ${Environment.getDefault().value} if not specified."
                     )
-                    putJsonArray("enum") {
-                        add("staging")
-                        add("release")
-                        add("production")
-                    }
+                    addEnvironmentEnumArray()
                 }
             },
             required = listOf("sql")
         )
     ) { request ->
         val sql = request.arguments["sql"]?.jsonPrimitive?.content
-        val environment = request.arguments["environment"]?.jsonPrimitive?.content ?: "staging"
+        val environment = try {
+            request.arguments["environment"]?.jsonPrimitive?.content
+                ?.let { Environment.fromString(it) } ?: Environment.getDefault()
+        } catch (e: IllegalArgumentException) {
+            return@addTool CallToolResult(content = listOf(TextContent("Invalid environment: ${e.message}")))
+        }
 
         val result = if (sql != null && sql.trim().uppercase().startsWith("SELECT")) {
             try {
@@ -164,7 +177,7 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
 
                 // Check if PII protection should be applied for this environment
                 val shouldApplyPiiProtection = try {
-                    PiiConfiguration.shouldApplyPiiProtection(environment)
+                    PiiConfiguration.shouldApplyPiiProtection(environment.value)
                 } catch (e: Exception) {
                     throw IllegalStateException("Production PII configuration error: ${e.message}", e)
                 }
@@ -176,7 +189,7 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
                     database.executeQuery(sql, 100)
                 }
 
-                val envInfo = " (Environment: $environment)"
+                val envInfo = " (Environment: ${environment.value})"
                 val piiWarning = if (shouldApplyPiiProtection) {
                     "\n🔒 PRODUCTION PII PROTECTION ENABLED - Sensitive columns automatically filtered\n"
                 } else ""
@@ -184,7 +197,7 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
                 "Query executed successfully!$envInfo$piiWarning\nRows returned: ${queryResult.rowCount}\n\n" +
                         formatQueryResult(queryResult, environment)
             } catch (e: Exception) {
-                if (environment == "production" && e.message?.contains("SELECT *") == true) {
+                if (environment == Environment.PRODUCTION && e.message?.contains("SELECT *") == true) {
                     "❌ Production Safety Error: ${e.message}\n\n" +
                             "💡 Tip: In production, you must specify explicit column names to avoid accidentally querying PII data.\n" +
                             "Example: SELECT id, name, created_at FROM users WHERE ..."
@@ -209,23 +222,26 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
                     put("type", "string")
                     put(
                         "description",
-                        "The database environment to query (staging, release, production). Defaults to staging if not specified."
+                        "The database environment to query (${
+                            Environment.getSupportedEnvironments().joinToString(", ")
+                        }). Defaults to ${Environment.getDefault().value} if not specified."
                     )
-                    putJsonArray("enum") {
-                        add("staging")
-                        add("release")
-                        add("production")
-                    }
+                    addEnvironmentEnumArray()
                 }
             }
         )
     ) { request ->
-        val environment = request.arguments["environment"]?.jsonPrimitive?.content
+        val environment = try {
+            request.arguments["environment"]?.jsonPrimitive?.content
+                ?.let { Environment.fromString(it) } ?: Environment.getDefault()
+        } catch (e: IllegalArgumentException) {
+            return@addTool CallToolResult(content = listOf(TextContent("Invalid environment: ${e.message}")))
+        }
 
         val result = try {
             val database = connectionManager.getConnection(environment)
             val tables = database.listTables()
-            val envInfo = if (environment != null) " (Environment: $environment)" else ""
+            val envInfo = " (Environment: ${environment.value})"
 
             if (tables.isEmpty()) {
                 "No tables found in the database$envInfo."
@@ -254,27 +270,30 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
                     put("type", "string")
                     put(
                         "description",
-                        "The database environment to query (staging, release, production). Defaults to staging if not specified."
+                        "The database environment to query (${
+                            Environment.getSupportedEnvironments().joinToString(", ")
+                        }). Defaults to ${Environment.getDefault().value} if not specified."
                     )
-                    putJsonArray("enum") {
-                        add("staging")
-                        add("release")
-                        add("production")
-                    }
+                    addEnvironmentEnumArray()
                 }
             },
             required = listOf("table_name")
         )
     ) { request ->
         val tableName = request.arguments["table_name"]?.jsonPrimitive?.content
-        val environment = request.arguments["environment"]?.jsonPrimitive?.content
+        val environment = try {
+            request.arguments["environment"]?.jsonPrimitive?.content
+                ?.let { Environment.fromString(it) } ?: Environment.getDefault()
+        } catch (e: IllegalArgumentException) {
+            return@addTool CallToolResult(content = listOf(TextContent("Invalid environment: ${e.message}")))
+        }
 
         val result = if (tableName != null) {
             try {
                 val database = connectionManager.getConnection(environment)
                 val schema = database.getTableSchema(tableName)
                 val relationships = database.getTableRelationships(tableName)
-                val envInfo = if (environment != null) " (Environment: $environment)" else ""
+                val envInfo = " (Environment: ${environment.value})"
                 formatTableSchemaWithRelationships(tableName, schema, relationships, envInfo)
             } catch (e: Exception) {
                 "Error getting schema for table '$tableName': ${e.message}"
@@ -300,26 +319,29 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
                     put("type", "string")
                     put(
                         "description",
-                        "The database environment to query (staging, release, production). Defaults to staging if not specified."
+                        "The database environment to query (${
+                            Environment.getSupportedEnvironments().joinToString(", ")
+                        }). Defaults to ${Environment.getDefault().value} if not specified."
                     )
-                    putJsonArray("enum") {
-                        add("staging")
-                        add("release")
-                        add("production")
-                    }
+                    addEnvironmentEnumArray()
                 }
             },
             required = listOf("table_name")
         )
     ) { request ->
         val tableName = request.arguments["table_name"]?.jsonPrimitive?.content
-        val environment = request.arguments["environment"]?.jsonPrimitive?.content
+        val environment = try {
+            request.arguments["environment"]?.jsonPrimitive?.content
+                ?.let { Environment.fromString(it) } ?: Environment.getDefault()
+        } catch (e: IllegalArgumentException) {
+            return@addTool CallToolResult(content = listOf(TextContent("Invalid environment: ${e.message}")))
+        }
 
         val result = if (tableName != null) {
             try {
                 val database = connectionManager.getConnection(environment)
                 val suggestions = database.getJoinSuggestions(tableName)
-                val envInfo = if (environment != null) " (Environment: $environment)" else ""
+                val envInfo = " (Environment: ${environment.value})"
                 formatJoinSuggestions(tableName, suggestions, envInfo)
             } catch (e: Exception) {
                 "Error getting join suggestions for table '$tableName': ${e.message}"
@@ -330,9 +352,6 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
 
         CallToolResult(content = listOf(TextContent(result)))
     }
-
-
-
 
 
     // Register postgres_connection_stats tool
@@ -367,27 +386,30 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
                     put("type", "string")
                     put(
                         "description",
-                        "The database environment to query (staging, release, production). Defaults to staging if not specified."
+                        "The database environment to query (${
+                            Environment.getSupportedEnvironments().joinToString(", ")
+                        }). Defaults to ${Environment.getDefault().value} if not specified."
                     )
-                    putJsonArray("enum") {
-                        add("staging")
-                        add("release")
-                        add("production")
-                    }
+                    addEnvironmentEnumArray()
                 }
             },
             required = listOf("table_name")
         )
     ) { request ->
         val tableName = request.arguments["table_name"]?.jsonPrimitive?.content
-        val environment = request.arguments["environment"]?.jsonPrimitive?.content
+        val environment = try {
+            request.arguments["environment"]?.jsonPrimitive?.content
+                ?.let { Environment.fromString(it) } ?: Environment.getDefault()
+        } catch (e: IllegalArgumentException) {
+            return@addTool CallToolResult(content = listOf(TextContent("Invalid environment: ${e.message}")))
+        }
 
         val result = if (tableName != null) {
             try {
                 val database = connectionManager.getConnection(environment)
                 val sensitivityInfo = database.getColumnSensitivityInfo(tableName)
                 val allColumns = database.getAllTableColumns(tableName)
-                val envInfo = if (environment != null) " (Environment: $environment)" else ""
+                val envInfo = " (Environment: ${environment.value})"
                 formatPiiColumns(sensitivityInfo, allColumns, tableName, envInfo)
             } catch (e: Exception) {
                 "Error getting PII column information: ${e.message}"
@@ -413,26 +435,29 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
                     put("type", "string")
                     put(
                         "description",
-                        "The database environment to query (staging, release, production). Defaults to staging if not specified."
+                        "The database environment to query (${
+                            Environment.getSupportedEnvironments().joinToString(", ")
+                        }). Defaults to ${Environment.getDefault().value} if not specified."
                     )
-                    putJsonArray("enum") {
-                        add("staging")
-                        add("release")
-                        add("production")
-                    }
+                    addEnvironmentEnumArray()
                 }
             },
             required = listOf("sql")
         )
     ) { request ->
         val sql = request.arguments["sql"]?.jsonPrimitive?.content
-        val environment = request.arguments["environment"]?.jsonPrimitive?.content ?: "staging"
+        val environment = try {
+            request.arguments["environment"]?.jsonPrimitive?.content
+                ?.let { Environment.fromString(it) } ?: Environment.getDefault()
+        } catch (e: IllegalArgumentException) {
+            return@addTool CallToolResult(content = listOf(TextContent("Invalid environment: ${e.message}")))
+        }
 
         val result = if (sql != null && sql.trim().uppercase().startsWith("SELECT")) {
             try {
                 val database = connectionManager.getConnection(environment)
                 val explainResult = database.explainQuery(sql)
-                val envInfo = " (Environment: $environment)"
+                val envInfo = " (Environment: ${environment.value})"
 
                 "Query execution plan generated successfully!$envInfo\n\n" +
                         formatExplainResult(explainResult, sql)
@@ -445,13 +470,99 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
 
         CallToolResult(content = listOf(TextContent(result)))
     }
+
+    // Register postgres_reconnect_database tool
+    server.addTool(
+        name = "postgres_reconnect_database",
+        description = "Reconnect to PostgreSQL database(s) - useful when VPN connection is restored or network issues are resolved",
+        inputSchema = Tool.Input(
+            properties = buildJsonObject {
+                putJsonObject("environment") {
+                    put("type", "string")
+                    put(
+                        "description",
+                        "The database environment to reconnect (${
+                            Environment.getSupportedEnvironments().joinToString(", ")
+                        }). If not specified, reconnects to all environments."
+                    )
+                    addEnvironmentEnumArray()
+                }
+                putJsonObject("test_connection") {
+                    put("type", "boolean")
+                    put(
+                        "description",
+                        "Whether to test connection health before attempting reconnection. Defaults to true."
+                    )
+                }
+            }
+        )
+    ) { request ->
+        val environment = try {
+            request.arguments["environment"]?.jsonPrimitive?.content
+                ?.let { Environment.fromString(it) }
+        } catch (e: IllegalArgumentException) {
+            return@addTool CallToolResult(content = listOf(TextContent("Invalid environment: ${e.message}")))
+        }
+
+        val testConnection = try {
+            request.arguments["test_connection"]?.jsonPrimitive?.content?.toBoolean() ?: true
+        } catch (e: Exception) {
+            true
+        }
+
+        val result = try {
+            runBlocking {
+                if (environment != null) {
+                    // Reconnect specific environment
+                    if (testConnection) {
+                        val isHealthy = connectionManager.testEnvironmentConnection(environment)
+                        if (isHealthy) {
+                            "✓ Connection to ${environment.value} database is already healthy. No reconnection needed."
+                        } else {
+                            val reconnectionResult = connectionManager.reconnectEnvironment(environment)
+                            formatReconnectionResult(reconnectionResult)
+                        }
+                    } else {
+                        val reconnectionResult = connectionManager.reconnectEnvironment(environment)
+                        formatReconnectionResult(reconnectionResult)
+                    }
+                } else {
+                    // Reconnect all environments
+                    if (testConnection) {
+                        val healthStatus = connectionManager.getConnectionHealth()
+                        val unhealthyEnvironments = healthStatus.filter { !it.value }.keys
+
+                        if (unhealthyEnvironments.isEmpty()) {
+                            "✓ All database connections are healthy. No reconnection needed.\n\n" +
+                                    "Connection Status:\n" + healthStatus.map { (env, healthy) ->
+                                "• $env: ${if (healthy) "✓ Healthy" else "✗ Unhealthy"}"
+                            }.joinToString("\n")
+                        } else {
+                            val reconnectionResults = connectionManager.reconnectAllEnvironments()
+                            formatMultipleReconnectionResults(reconnectionResults, healthStatus)
+                        }
+                    } else {
+                        val reconnectionResults = connectionManager.reconnectAllEnvironments()
+                        formatMultipleReconnectionResults(reconnectionResults)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            "Error during database reconnection: ${e.message}"
+        }
+
+        CallToolResult(content = listOf(TextContent(result)))
+    }
 }
 
 
 /**
  * Format query results as a simple table with environment-aware PII protection
  */
-private fun formatQueryResult(result: QueryExecutionResult, environment: String = "staging"): String {
+private fun formatQueryResult(
+    result: QueryExecutionResult,
+    environment: Environment = Environment.getDefault()
+): String {
     if (result.rows.isEmpty()) {
         return "No rows returned."
     }
@@ -466,7 +577,7 @@ private fun formatQueryResult(result: QueryExecutionResult, environment: String 
     return buildString {
         // Check if PII protection should be applied for this environment
         val shouldApplyPiiProtection = try {
-            PiiConfiguration.shouldApplyPiiProtection(environment)
+            PiiConfiguration.shouldApplyPiiProtection(environment.value)
         } catch (e: Exception) {
             false // If configuration is missing, assume disabled
         }
@@ -647,7 +758,6 @@ private fun formatJoinSuggestions(
 }
 
 
-
 /**
  * Format HikariCP connection statistics for monitoring
  */
@@ -655,6 +765,28 @@ private fun formatConnectionStats(stats: Map<String, Any>): String {
     return buildString {
         appendLine("=== HikariCP Connection Pool Statistics ===")
         appendLine()
+
+        val status = stats["status"] as? String
+
+        if (status == "no_connections") {
+            appendLine("🔄 Connection Status: No Active Connections")
+            appendLine()
+            appendLine("${stats["message"]}")
+            appendLine()
+            appendLine("🔧 To establish connections:")
+            appendLine("  • Use: postgres_reconnect_database (reconnects all environments)")
+            appendLine("  • Use: postgres_reconnect_database with environment parameter (reconnects specific environment)")
+            appendLine()
+            appendLine("💡 Common scenarios:")
+            appendLine("  • VPN connection was lost and restored")
+            appendLine("  • Database servers were temporarily unavailable")
+            appendLine("  • MCP server started without valid connections")
+            appendLine("  • Network connectivity issues occurred")
+            appendLine()
+        } else {
+            appendLine("✅ Connection Status: Active Connections Available")
+            appendLine()
+        }
 
         // Overall summary
         val summary = stats["summary"] as? Map<*, *>
@@ -674,6 +806,8 @@ private fun formatConnectionStats(stats: Map<String, Any>): String {
         val environments = stats["available_environments"] as? List<*>
         if (environments != null && environments.isNotEmpty()) {
             appendLine("  • Available: ${environments.joinToString(", ")}")
+        } else {
+            appendLine("  • Available: None (use postgres_reconnect_database to establish connections)")
         }
         appendLine()
 
@@ -702,16 +836,17 @@ private fun formatConnectionStats(stats: Map<String, Any>): String {
             }
         }
 
-        appendLine("HikariCP Features:")
-        appendLine("  • Enterprise-grade connection pooling")
-        appendLine("  • Automatic connection validation")
-        appendLine("  • Connection leak detection")
-        appendLine("  • JMX monitoring and metrics")
-        appendLine("  • Optimized performance and memory usage")
-        appendLine("  • Thread-safe concurrent operations")
+        if (status != "no_connections") {
+            appendLine("HikariCP Features:")
+            appendLine("  • Enterprise-grade connection pooling")
+            appendLine("  • Automatic connection validation")
+            appendLine("  • Connection leak detection")
+            appendLine("  • JMX monitoring and metrics")
+            appendLine("  • Optimized performance and memory usage")
+            appendLine("  • Thread-safe concurrent operations")
+        }
     }
 }
-
 
 
 /**
@@ -729,7 +864,8 @@ private fun formatPiiColumns(
 
         // Show PII checking configuration status
         val environment =
-            envInfo.substringAfter("Environment: ").substringBefore(")").takeIf { it.isNotEmpty() } ?: "staging"
+            envInfo.substringAfter("Environment: ").substringBefore(")").takeIf { it.isNotEmpty() }
+                ?: Environment.getDefault().value
 
         try {
             val shouldApplyPiiProtection = PiiConfiguration.shouldApplyPiiProtection(environment)
@@ -893,6 +1029,112 @@ private fun extractExecutionSummary(jsonElement: JsonElement): List<String> {
     }
 
     return summary
+}
+
+/**
+ * Format single reconnection result
+ */
+private fun formatReconnectionResult(result: ReconnectionResult): String {
+    return buildString {
+        appendLine("=== Database Reconnection Result ===")
+        appendLine()
+
+        if (result.success) {
+            appendLine("✅ SUCCESS: ${result.message}")
+            if (result.connectionInfo != null) {
+                appendLine("   Connection: ${result.connectionInfo}")
+            }
+        } else {
+            appendLine("❌ FAILED: ${result.message}")
+            if (result.error != null) {
+                appendLine("   Error: ${result.error}")
+            }
+        }
+
+        appendLine("   Environment: ${result.environment}")
+        appendLine()
+
+        if (result.success) {
+            appendLine("🔧 Next Steps:")
+            appendLine("   • Database connection is now active and ready for queries")
+            appendLine("   • You can verify connectivity using postgres_connection_stats")
+            appendLine("   • Try running a simple query to confirm functionality")
+        } else {
+            appendLine("🔧 Troubleshooting:")
+            appendLine("   • Check VPN connection status")
+            appendLine("   • Verify database.properties configuration")
+            appendLine("   • Ensure database server is accessible")
+            appendLine("   • Check network connectivity to database host")
+        }
+    }
+}
+
+/**
+ * Format multiple reconnection results
+ */
+private fun formatMultipleReconnectionResults(
+    results: List<ReconnectionResult>,
+    healthStatus: Map<String, Boolean>? = null
+): String {
+    return buildString {
+        appendLine("=== Database Reconnection Results ===")
+        appendLine()
+
+        if (healthStatus != null) {
+            appendLine("Initial Health Check:")
+            healthStatus.forEach { (env, healthy) ->
+                appendLine("   • $env: ${if (healthy) "✓ Healthy" else "✗ Unhealthy"}")
+            }
+            appendLine()
+        }
+
+        val successfulReconnections = results.filter { it.success }
+        val failedReconnections = results.filter { !it.success }
+
+        appendLine("Reconnection Summary:")
+        appendLine("   • Total environments: ${results.size}")
+        appendLine("   • Successful: ${successfulReconnections.size}")
+        appendLine("   • Failed: ${failedReconnections.size}")
+        appendLine()
+
+        if (successfulReconnections.isNotEmpty()) {
+            appendLine("✅ SUCCESSFUL RECONNECTIONS:")
+            successfulReconnections.forEach { result ->
+                appendLine("   • ${result.environment}: ${result.message}")
+                if (result.connectionInfo != null) {
+                    appendLine("     Connection: ${result.connectionInfo}")
+                }
+            }
+            appendLine()
+        }
+
+        if (failedReconnections.isNotEmpty()) {
+            appendLine("❌ FAILED RECONNECTIONS:")
+            failedReconnections.forEach { result ->
+                appendLine("   • ${result.environment}: ${result.message}")
+                if (result.error != null) {
+                    appendLine("     Error: ${result.error}")
+                }
+            }
+            appendLine()
+        }
+
+        if (successfulReconnections.isNotEmpty()) {
+            appendLine("🔧 Next Steps:")
+            appendLine("   • ${successfulReconnections.size} database connection(s) are now active")
+            appendLine("   • Use postgres_connection_stats to verify pool status")
+            appendLine("   • Test connectivity with simple queries")
+        }
+
+        if (failedReconnections.isNotEmpty()) {
+            appendLine("🔧 Troubleshooting Failed Connections:")
+            appendLine("   • Check VPN connection status")
+            appendLine("   • Verify database.properties configuration for failed environments")
+            appendLine("   • Ensure database servers are accessible")
+            appendLine("   • Check network connectivity to database hosts")
+            appendLine("   • Review server logs for connection errors")
+        }
+    }
 }
 
 /**
