@@ -620,42 +620,7 @@ class PostgreSqlRepository {
         )
     }
 
-    /**
-     * Get all columns for a table (for secure-by-default PII filtering)
-     */
-    suspend fun getAllTableColumns(tableName: String): List<String> = withContext(Dispatchers.IO) {
-        var connection: Connection? = null
-        var preparedStatement: java.sql.PreparedStatement? = null
-        var resultSet: ResultSet? = null
 
-        try {
-            connection = getConnection()
-
-            val sql = """
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_name = ?
-                ORDER BY ordinal_position
-            """.trimIndent()
-
-            preparedStatement = connection.prepareStatement(sql)
-            preparedStatement.setString(1, tableName)
-            resultSet = preparedStatement.executeQuery()
-
-            val columns = mutableListOf<String>()
-            while (resultSet.next()) {
-                columns.add(resultSet.getString("column_name"))
-            }
-            columns
-        } catch (e: SQLException) {
-            System.err.println("Warning: Could not get table columns: ${e.message}")
-            emptyList()
-        } finally {
-            resultSet?.close()
-            preparedStatement?.close()
-            connection?.close()
-        }
-    }
 
     /**
      * Rewrite SQL query to exclude PII columns in production (secure by default)
@@ -676,19 +641,11 @@ class PostgreSqlRepository {
 
             // Get PII information for all tables in the query
             for (tableName in tableNames) {
-                // Get all columns in the table
-                val allColumns = getAllTableColumns(tableName)
-
                 // Get columns with explicit sensitivity information
                 val sensitivityInfo = getColumnSensitivityInfo(tableName)
 
-                // SECURE BY DEFAULT: Only allow columns explicitly marked as non-personal
-                val safeColumns = sensitivityInfo.filter { !it.value.isPii }.keys
-
-                // All other columns (unmarked or marked as PII) are considered PII
-                val piiColumns = allColumns.filter { columnName ->
-                    columnName !in safeColumns
-                }
+                // Only consider columns that are explicitly marked as PII
+                val piiColumns = sensitivityInfo.filter { it.value.isPii }.keys
 
                 allPiiColumns.addAll(piiColumns.map { "$tableName.$it" })
             }
@@ -741,10 +698,14 @@ class PostgreSqlRepository {
      * Rewrite SELECT statement to exclude PII columns
      */
     private fun rewriteSelectStatement(sql: String, piiColumns: List<String>): String {
-        // For SELECT * queries, we need to expand to specific columns
+        // If no PII columns to filter, return original query
+        if (piiColumns.isEmpty()) {
+            return sql
+        }
+
+        // For SELECT * queries, we cannot easily filter specific columns without knowing all table columns
         if (sql.uppercase().contains("SELECT *")) {
-            // This is complex to implement properly, so for now we'll block SELECT * in production
-            throw Exception("SELECT * queries are not allowed in production due to PII protection. Please specify explicit column names.")
+            throw Exception("SELECT * queries with PII columns are not supported in production. Please specify explicit column names and exclude PII columns: ${piiColumns.joinToString(", ")}")
         }
 
         // For explicit column selection, remove PII columns

@@ -408,9 +408,8 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
             try {
                 val database = connectionManager.getConnection(environment)
                 val sensitivityInfo = database.getColumnSensitivityInfo(tableName)
-                val allColumns = database.getAllTableColumns(tableName)
                 val envInfo = " (Environment: ${environment.value})"
-                formatPiiColumns(sensitivityInfo, allColumns, tableName, envInfo)
+                formatPiiColumns(sensitivityInfo, tableName, envInfo)
             } catch (e: Exception) {
                 "Error getting PII column information: ${e.message}"
             }
@@ -584,7 +583,7 @@ private fun formatQueryResult(
 
         // Add PII protection warning if applicable
         if (shouldApplyPiiProtection) {
-            appendLine("🔒 PRODUCTION PII PROTECTION ACTIVE - Sensitive columns have been automatically excluded")
+            appendLine("🔒 PRODUCTION PII PROTECTION ACTIVE - Columns marked as 'personal' have been excluded")
             appendLine()
         }
 
@@ -606,10 +605,9 @@ private fun formatQueryResult(
         // Add PII protection footer if applicable
         if (shouldApplyPiiProtection) {
             appendLine()
-            appendLine("🛡️  PRODUCTION SECURE BY DEFAULT Security Notice:")
-            appendLine("   • Only columns explicitly marked as 'non-personal' are included")
-            appendLine("   • All unmarked columns are treated as PII and automatically excluded")
-            appendLine("   • This prevents accidental exposure of unclassified sensitive data")
+            appendLine("🛡️  PRODUCTION PII PROTECTION Security Notice:")
+            appendLine("   • Columns marked as 'personal' have been automatically excluded")
+            appendLine("   • Only columns marked as 'non-personal' are included in results")
             appendLine("   • PII checking is enabled for production environment")
         }
     }
@@ -850,11 +848,10 @@ private fun formatConnectionStats(stats: Map<String, Any>): String {
 
 
 /**
- * Format PII column information with secure-by-default explanation
+ * Format PII column information
  */
 private fun formatPiiColumns(
     sensitivityInfo: Map<String, ColumnSensitivityInfo>,
-    allColumns: List<String>,
     tableName: String,
     envInfo: String = ""
 ): String {
@@ -884,26 +881,15 @@ private fun formatPiiColumns(
         if (sensitivityInfo.isEmpty()) {
             appendLine("⚠️  No column sensitivity information found.")
             appendLine()
-            if (allColumns.isNotEmpty()) {
-                appendLine("🔒 SECURE BY DEFAULT: All ${allColumns.size} columns will be treated as PII in production")
-                appendLine("Unmarked columns (first 10):")
-                allColumns.take(10).forEach { columnName ->
-                    appendLine("  • $columnName (unmarked - treated as PII)")
-                }
-                if (allColumns.size > 10) {
-                    appendLine("  ... and ${allColumns.size - 10} more columns")
-                }
-                appendLine()
-            }
-            appendLine("To mark columns as safe for production queries:")
-            appendLine("COMMENT ON COLUMN $tableName.column_name IS '[{\"sensitivity\":\"internal\", \"privacy\":\"non-personal\"}]';")
+            appendLine("To mark columns with privacy information:")
+            appendLine("COMMENT ON COLUMN $tableName.column_name IS '{\"sensitivity\":\"internal\", \"privacy\":\"non-personal\"}';")
+            appendLine("COMMENT ON COLUMN $tableName.column_name IS '{\"sensitivity\":\"internal\", \"privacy\":\"personal\"}';")
         } else {
             val piiColumns = sensitivityInfo.filter { it.value.isPii }
             val nonPiiColumns = sensitivityInfo.filter { !it.value.isPii }
-            val unmarkedColumns = allColumns.filter { it !in sensitivityInfo.keys }
 
             if (nonPiiColumns.isNotEmpty()) {
-                appendLine("✅ SAFE COLUMNS (allowed in production queries):")
+                appendLine("✅ NON-PII COLUMNS (privacy: non-personal):")
                 nonPiiColumns.forEach { (columnName, info) ->
                     appendLine("  • $columnName: ${info.privacy} data (${info.sensitivity} sensitivity)")
                 }
@@ -911,7 +897,7 @@ private fun formatPiiColumns(
             }
 
             if (piiColumns.isNotEmpty()) {
-                appendLine("🔒 MARKED PII COLUMNS (filtered in production):")
+                appendLine("🔒 PII COLUMNS (privacy: personal):")
                 piiColumns.forEach { (columnName, info) ->
                     val sensitivityLevel = if (info.isHighSensitivity) "HIGH" else "MEDIUM"
                     appendLine("  • $columnName: ${info.privacy} data (${info.sensitivity} sensitivity - $sensitivityLevel)")
@@ -919,29 +905,17 @@ private fun formatPiiColumns(
                 appendLine()
             }
 
-            if (unmarkedColumns.isNotEmpty()) {
-                appendLine("⚠️  UNMARKED COLUMNS (treated as PII by default):")
-                unmarkedColumns.take(10).forEach { columnName ->
-                    appendLine("  • $columnName (no comment - treated as PII)")
-                }
-                if (unmarkedColumns.size > 10) {
-                    appendLine("  ... and ${unmarkedColumns.size - 10} more columns")
-                }
-                appendLine()
-            }
-
-            val totalPiiCount = piiColumns.size + unmarkedColumns.size
             appendLine("Summary:")
-            appendLine("  • Total columns: ${allColumns.size}")
-            appendLine("  • Safe for production: ${nonPiiColumns.size}")
-            appendLine("  • Treated as PII: $totalPiiCount (${piiColumns.size} marked + ${unmarkedColumns.size} unmarked)")
+            appendLine("  • Columns with privacy information: ${sensitivityInfo.size}")
+            appendLine("  • Non-PII columns: ${nonPiiColumns.size}")
+            appendLine("  • PII columns: ${piiColumns.size}")
 
-            appendLine()
-            appendLine("🛡️  SECURE BY DEFAULT Production Behavior:")
-            appendLine("   • Only columns explicitly marked as 'non-personal' are allowed")
-            appendLine("   • All unmarked columns are treated as PII and filtered out")
-            appendLine("   • SELECT * queries are blocked to prevent accidental exposure")
-            appendLine("   • This prevents accidental exposure of unclassified sensitive data")
+            if (piiColumns.isNotEmpty()) {
+                appendLine()
+                appendLine("🛡️  Production Behavior:")
+                appendLine("   • PII columns marked as 'personal' will be filtered from production queries")
+                appendLine("   • Only columns marked as 'non-personal' are safe for production queries")
+            }
         }
     }
 }

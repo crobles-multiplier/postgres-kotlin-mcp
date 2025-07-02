@@ -164,12 +164,12 @@ environment:
 
 ## PII Column Detection
 
-This MCP server includes a tool to detect and analyze PII (Personally Identifiable Information) columns based on existing database column comments:
+This MCP server includes a tool to detect and analyze PII (Personally Identifiable Information) columns based on database column comments:
 
 ### How It Works
-- **Read-Only Analysis**: The `postgres_get_pii_columns` tool reads existing column metadata from database comments
-- **JSON Comment Detection**: Analyzes PostgreSQL column comments that contain JSON sensitivity information
-- **Flexible Format Support**: Supports both JSON array and object formats in existing column comments
+- **Comment-Based Detection**: The `postgres_get_pii_columns` tool reads column comments containing JSON privacy information
+- **Privacy Field Analysis**: Analyzes the `privacy` field in column comments to determine PII status
+- **Simple Classification**: Columns marked as `"privacy": "personal"` are treated as PII, `"privacy": "non-personal"` are safe
 
 ### Using PII Detection
 1. **Query column information**: Use `postgres_get_pii_columns` tool to analyze table columns
