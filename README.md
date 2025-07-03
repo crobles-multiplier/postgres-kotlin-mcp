@@ -25,10 +25,10 @@ A Model Context Protocol (MCP) server that provides tools to interact with Postg
 |-----------|-------------|-------------------|-------------------|---------|
 | `postgres_query` | Execute SELECT queries against the database | `sql` (string) | `environment` (staging/release/production) | Query results in table format |
 | `postgres_list_tables` | List all tables in the database | None | `environment` (staging/release/production) | List of table names |
-| `postgres_get_table_schema` | Get detailed schema information for a table | `table_name` (string) | `environment` (staging/release/production) | Column details with data types, constraints, and relationship indicators |
+| `postgres_get_table_schema` | Get detailed schema information for a table with PII analysis in production | `table_name` (string) | `environment` (staging/release/production) | Column details with data types, constraints, relationships, and accessibility status (production only) |
 | `postgres_suggest_joins` | Suggest JOIN queries based on relationships | `table_name` (string) | `environment` (staging/release/production) | Suggested JOIN conditions and example queries |
 | `postgres_connection_stats` | Get connection pool statistics and health info | None | None | HikariCP pool status, metrics, and health information |
-| `postgres_get_pii_columns` | Get PII column information based on database comments | `table_name` (string) | `environment` (staging/release/production) | List of PII and non-PII columns with sensitivity levels |
+
 | `postgres_explain_query` | Get PostgreSQL query execution plan with performance analysis | `sql` (string) | `environment` (staging/release/production) | Detailed execution plan with timing, costs, and optimization insights |
 | `postgres_reconnect_database` | Reconnect to database(s) - useful when VPN connection is restored | None | `environment` (staging/release/production), `test_connection` (boolean) | Reconnection status and results for specified or all environments |
 
@@ -164,22 +164,23 @@ environment:
 
 ## PII Column Detection
 
-This MCP server includes a tool to detect and analyze PII (Personally Identifiable Information) columns based on database column comments:
+This MCP server includes enhanced PII (Personally Identifiable Information) analysis integrated into the table schema tool:
 
 ### How It Works
-- **Comment-Based Detection**: The `postgres_get_pii_columns` tool reads column comments containing JSON privacy information
+- **Integrated Analysis**: The `postgres_get_table_schema` tool automatically includes PII information in production environments
 - **Privacy Field Analysis**: Analyzes the `privacy` field in column comments to determine PII status
+- **Accessibility Status**: Shows ACCESSIBLE, FILTERED, or UNKNOWN status for each column in production
 - **Simple Classification**: Columns marked as `"privacy": "personal"` are treated as PII, `"privacy": "non-personal"` are safe
 
 ### Using PII Detection
-1. **Query column information**: Use `postgres_get_pii_columns` tool to analyze table columns
-2. **Review results**: See which columns are marked as PII vs non-PII based on existing comments
-3. **Compliance support**: Use for data auditing and classification purposes
+1. **Query table schema**: Use `postgres_get_table_schema` tool with production environment
+2. **Review accessibility status**: See which columns are accessible, filtered, or have unknown status
+3. **Follow safety guidance**: Use provided safe query examples and column recommendations
 
 ### Example Usage
-- *"Show me which columns in the users table contain PII"*
-- *"What's the sensitivity level of columns in the orders table?"*
-- *"List all non-personal columns in the customers table"*
+- *"Show me the table structure for users in production"*
+- *"What columns are safe to query in the orders table?"*
+- *"Get the complete schema with PII information for customers table"*
 
 ## Building
 

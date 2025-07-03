@@ -189,12 +189,11 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
                     database.executeQuery(sql, 100)
                 }
 
-                val envInfo = " (Environment: ${environment.value})"
                 val piiWarning = if (shouldApplyPiiProtection) {
                     "\n🔒 PRODUCTION PII PROTECTION ENABLED - Sensitive columns automatically filtered\n"
                 } else ""
 
-                "Query executed successfully!$envInfo$piiWarning\nRows returned: ${queryResult.rowCount}\n\n" +
+                "Query executed successfully! (Environment: ${environment.value})$piiWarning\nRows returned: ${queryResult.rowCount}\n\n" +
                         formatQueryResult(queryResult, environment)
             } catch (e: Exception) {
                 if (environment == Environment.PRODUCTION && e.message?.contains("SELECT *") == true) {
@@ -241,12 +240,11 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
         val result = try {
             val database = connectionManager.getConnection(environment)
             val tables = database.listTables()
-            val envInfo = " (Environment: ${environment.value})"
 
             if (tables.isEmpty()) {
-                "No tables found in the database$envInfo."
+                "No tables found in the database (Environment: ${environment.value})."
             } else {
-                "Tables in database$envInfo:\n" + tables.joinToString("\n") { "• ${it.name}" }
+                "Tables in database (Environment: ${environment.value}):\n" + tables.joinToString("\n") { "• ${it.name}" }
             }
         } catch (e: Exception) {
             "Error listing tables: ${e.message}"
@@ -293,8 +291,14 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
                 val database = connectionManager.getConnection(environment)
                 val schema = database.getTableSchema(tableName)
                 val relationships = database.getTableRelationships(tableName)
-                val envInfo = " (Environment: ${environment.value})"
-                formatTableSchemaWithRelationships(tableName, schema, relationships, envInfo)
+
+                // Use enhanced formatting for production, standard for others
+                if (environment == Environment.PRODUCTION) {
+                    val sensitivityInfo = database.getColumnSensitivityInfo(tableName)
+                    formatEnhancedTableSchemaForProduction(tableName, schema, relationships, sensitivityInfo, environment)
+                } else {
+                    formatTableSchemaWithRelationships(tableName, schema, relationships, environment)
+                }
             } catch (e: Exception) {
                 "Error getting schema for table '$tableName': ${e.message}"
             }
@@ -341,8 +345,7 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
             try {
                 val database = connectionManager.getConnection(environment)
                 val suggestions = database.getJoinSuggestions(tableName)
-                val envInfo = " (Environment: ${environment.value})"
-                formatJoinSuggestions(tableName, suggestions, envInfo)
+                formatJoinSuggestions(tableName, suggestions, environment)
             } catch (e: Exception) {
                 "Error getting join suggestions for table '$tableName': ${e.message}"
             }
@@ -372,53 +375,7 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
         CallToolResult(content = listOf(TextContent(result)))
     }
 
-    // Register postgres_get_pii_columns tool
-    server.addTool(
-        name = "postgres_get_pii_columns",
-        description = "Get information about columns marked as containing PII based on database comments",
-        inputSchema = Tool.Input(
-            properties = buildJsonObject {
-                putJsonObject("table_name") {
-                    put("type", "string")
-                    put("description", "Name of the table to check for PII columns")
-                }
-                putJsonObject("environment") {
-                    put("type", "string")
-                    put(
-                        "description",
-                        "The database environment to query (${
-                            Environment.getSupportedEnvironments().joinToString(", ")
-                        }). Defaults to ${Environment.getDefault().value} if not specified."
-                    )
-                    addEnvironmentEnumArray()
-                }
-            },
-            required = listOf("table_name")
-        )
-    ) { request ->
-        val tableName = request.arguments["table_name"]?.jsonPrimitive?.content
-        val environment = try {
-            request.arguments["environment"]?.jsonPrimitive?.content
-                ?.let { Environment.fromString(it) } ?: Environment.getDefault()
-        } catch (e: IllegalArgumentException) {
-            return@addTool CallToolResult(content = listOf(TextContent("Invalid environment: ${e.message}")))
-        }
 
-        val result = if (tableName != null) {
-            try {
-                val database = connectionManager.getConnection(environment)
-                val sensitivityInfo = database.getColumnSensitivityInfo(tableName)
-                val envInfo = " (Environment: ${environment.value})"
-                formatPiiColumns(sensitivityInfo, tableName, envInfo)
-            } catch (e: Exception) {
-                "Error getting PII column information: ${e.message}"
-            }
-        } else {
-            "Table name is required"
-        }
-
-        CallToolResult(content = listOf(TextContent(result)))
-    }
 
     // Register postgres_explain_query tool
     server.addTool(
@@ -456,9 +413,8 @@ private fun registerPostgreSqlTools(server: Server, connectionManager: HikariCon
             try {
                 val database = connectionManager.getConnection(environment)
                 val explainResult = database.explainQuery(sql)
-                val envInfo = " (Environment: ${environment.value})"
 
-                "Query execution plan generated successfully!$envInfo\n\n" +
+                "Query execution plan generated successfully! (Environment: ${environment.value})\n\n" +
                         formatExplainResult(explainResult, sql)
             } catch (e: Exception) {
                 "Error analyzing query: ${e.message}"
@@ -616,9 +572,9 @@ private fun formatQueryResult(
 /**
  * Format table relationships information
  */
-private fun formatTableRelationships(relationships: TableRelationshipSummary, envInfo: String = ""): String {
+private fun formatTableRelationships(relationships: TableRelationshipSummary, environment: Environment = Environment.getDefault()): String {
     return buildString {
-        appendLine("=== Table Relationships for '${relationships.tableName}'$envInfo ===")
+        appendLine("=== Table Relationships for '${relationships.tableName}' (Environment: ${environment.value}) ===")
         appendLine()
 
         // Primary Keys
@@ -682,10 +638,10 @@ private fun formatTableSchemaWithRelationships(
     tableName: String,
     schema: List<TableColumn>,
     relationships: TableRelationshipSummary,
-    envInfo: String = ""
+    environment: Environment = Environment.getDefault()
 ): String {
     return buildString {
-        appendLine("=== Schema for table '$tableName'$envInfo ===")
+        appendLine("=== Schema for table '$tableName' (Environment: ${environment.value}) ===")
         appendLine()
 
         // Column information
@@ -714,8 +670,158 @@ private fun formatTableSchemaWithRelationships(
         appendLine()
 
         // Add relationship summary
-        val relationshipSummary = formatTableRelationships(relationships, envInfo)
+        val relationshipSummary = formatTableRelationships(relationships, environment)
         append(relationshipSummary)
+    }
+}
+
+/**
+ * Format enhanced table schema with accessibility information for production environment
+ */
+private fun formatEnhancedTableSchemaForProduction(
+    tableName: String,
+    schema: List<TableColumn>,
+    relationships: TableRelationshipSummary,
+    sensitivityInfo: Map<String, ColumnSensitivityInfo>,
+    environment: Environment = Environment.getDefault()
+): String {
+    return buildString {
+        appendLine("=== Enhanced Table Analysis for '$tableName' (Environment: ${environment.value}) ===")
+        appendLine()
+
+        // Check if PII protection is active
+        val shouldApplyPiiProtection = try {
+            PiiConfiguration.shouldApplyPiiProtection(Environment.PRODUCTION.value)
+        } catch (e: Exception) {
+            false
+        }
+
+        if (shouldApplyPiiProtection) {
+            appendLine("PRODUCTION PII PROTECTION ACTIVE")
+            appendLine()
+        }
+
+        appendLine("COMPLETE TABLE STRUCTURE:")
+        appendLine()
+
+        // Column information with accessibility status
+        appendLine("COLUMNS WITH ACCESSIBILITY STATUS:")
+        if (schema.isEmpty()) {
+            appendLine("  No columns found.")
+        } else {
+            val maxNameWidth = schema.maxOfOrNull { it.name.length } ?: 10
+            val maxTypeWidth = schema.maxOfOrNull { it.type.length } ?: 10
+            val maxConstraintWidth = 35 // Fixed width for constraint info
+
+            var accessibleCount = 0
+            var filteredCount = 0
+            var unknownCount = 0
+            val accessibleColumns = mutableListOf<String>()
+
+            schema.forEach { column ->
+                val pkIndicator = if (relationships.primaryKeys.any { it.columnName == column.name }) " (PK)" else ""
+                val fkIndicator = if (relationships.foreignKeys.any { it.sourceColumn == column.name }) " (FK)" else ""
+                val uniqueIndicator =
+                    if (relationships.uniqueConstraints.any { it.columnName == column.name }) " (UNIQUE)" else ""
+                val nullableIndicator = if (column.nullable) " NULL" else " NOT NULL"
+                val sizeInfo = column.size?.let { " ($it)" } ?: ""
+                val defaultInfo = column.defaultValue?.let { " DEFAULT $it" } ?: ""
+
+                val name = column.name.padEnd(maxNameWidth)
+                val type = column.type.padEnd(maxTypeWidth)
+                val constraintInfo = "$sizeInfo$nullableIndicator$pkIndicator$fkIndicator$uniqueIndicator$defaultInfo"
+                val paddedConstraintInfo = constraintInfo.padEnd(maxConstraintWidth)
+
+                // Determine accessibility status
+                val accessibilityStatus = if (shouldApplyPiiProtection) {
+                    val sensitivity = sensitivityInfo[column.name]
+                    when {
+                        sensitivity != null && sensitivity.isPii -> {
+                            filteredCount++
+                            "FILTERED"
+                        }
+                        sensitivity != null && !sensitivity.isPii -> {
+                            accessibleCount++
+                            accessibleColumns.add(column.name)
+                            "ACCESSIBLE"
+                        }
+                        else -> {
+                            unknownCount++
+                            "UNKNOWN"
+                        }
+                    }
+                } else {
+                    accessibleCount++
+                    accessibleColumns.add(column.name)
+                    "ACCESSIBLE"
+                }
+
+                appendLine("  $name $type $paddedConstraintInfo $accessibilityStatus")
+            }
+
+            appendLine()
+
+            // Accessibility Summary
+            appendLine("ACCESSIBILITY SUMMARY:")
+            appendLine("  • Total columns in table: ${schema.size}")
+            appendLine("  • Accessible columns: $accessibleCount (${(accessibleCount * 100 / schema.size)}%)")
+            if (filteredCount > 0) {
+                appendLine("  • Filtered columns: $filteredCount (${(filteredCount * 100 / schema.size)}%)")
+            }
+            if (unknownCount > 0) {
+                appendLine("  • Unknown access columns: $unknownCount (${(unknownCount * 100 / schema.size)}%)")
+            }
+
+            // PII information if available
+            if (sensitivityInfo.isNotEmpty()) {
+                val nonPiiColumns = sensitivityInfo.filter { !it.value.isPii }
+                val piiColumns = sensitivityInfo.filter { it.value.isPii }
+                appendLine("  • Confirmed non-PII columns: ${nonPiiColumns.size}")
+                if (piiColumns.isNotEmpty()) {
+                    appendLine("  • Confirmed PII columns: ${piiColumns.size} (filtered from queries)")
+                }
+            }
+            appendLine()
+        }
+
+        // Add relationship information (same as standard format)
+        val relationshipSummary = formatTableRelationships(relationships, environment)
+        append(relationshipSummary)
+
+        // Add production-specific guidance if PII protection is active
+        if (shouldApplyPiiProtection && schema.isNotEmpty()) {
+            appendLine()
+            appendLine("PRODUCTION ANALYSIS LIMITATIONS:")
+            appendLine("  • This analysis combines table metadata with accessible privacy information")
+            appendLine("  • PII columns are filtered from query results but visible in table structure")
+            appendLine("  • Columns without privacy info have unknown accessibility status")
+            appendLine()
+
+            appendLine("AI QUERY SAFETY GUIDANCE:")
+            appendLine("  • NEVER use SELECT * in production")
+
+            val accessibleColumns = mutableListOf<String>()
+            schema.forEach { column ->
+                val sensitivity = sensitivityInfo[column.name]
+                if (sensitivity != null && !sensitivity.isPii) {
+                    accessibleColumns.add(column.name)
+                }
+            }
+
+            if (accessibleColumns.isNotEmpty()) {
+                appendLine("  • Only query confirmed accessible columns: ${accessibleColumns.joinToString(", ")}")
+                appendLine("  • Avoid columns marked as FILTERED or UNKNOWN")
+                appendLine("  • Use explicit column names: SELECT ${accessibleColumns.joinToString(", ")} FROM $tableName")
+                appendLine()
+                appendLine("SAFE QUERY EXAMPLE:")
+                appendLine("  SELECT ${accessibleColumns.take(3).joinToString(", ")}")
+                appendLine("  FROM $tableName")
+                appendLine("  WHERE ${accessibleColumns.firstOrNull() ?: "id"} IS NOT NULL")
+            } else {
+                appendLine("  • DO NOT assume any columns are safe to query")
+                appendLine("  • Contact database administrator to add privacy information")
+            }
+        }
     }
 }
 
@@ -725,10 +831,10 @@ private fun formatTableSchemaWithRelationships(
 private fun formatJoinSuggestions(
     tableName: String,
     suggestions: List<JoinRecommendation>,
-    envInfo: String = ""
+    environment: Environment = Environment.getDefault()
 ): String {
     return buildString {
-        appendLine("=== JOIN Suggestions for table '$tableName'$envInfo ===")
+        appendLine("=== JOIN Suggestions for table '$tableName' (Environment: ${environment.value}) ===")
         appendLine()
 
         if (suggestions.isEmpty()) {
@@ -847,78 +953,7 @@ private fun formatConnectionStats(stats: Map<String, Any>): String {
 }
 
 
-/**
- * Format PII column information
- */
-private fun formatPiiColumns(
-    sensitivityInfo: Map<String, ColumnSensitivityInfo>,
-    tableName: String,
-    envInfo: String = ""
-): String {
-    return buildString {
-        appendLine("=== PII Column Analysis for table '$tableName'$envInfo ===")
-        appendLine()
 
-        // Show PII checking configuration status
-        val environment =
-            envInfo.substringAfter("Environment: ").substringBefore(")").takeIf { it.isNotEmpty() }
-                ?: Environment.getDefault().value
-
-        try {
-            val shouldApplyPiiProtection = PiiConfiguration.shouldApplyPiiProtection(environment)
-
-            appendLine("🔧 PII Protection Configuration:")
-            appendLine("   • Environment: $environment")
-            appendLine("   • PII Checking: ${if (shouldApplyPiiProtection) "✅ ENABLED" else "❌ DISABLED"}")
-            appendLine()
-        } catch (e: Exception) {
-            appendLine("❌ PII Protection Configuration Error:")
-            appendLine("   • ${e.message}")
-            appendLine()
-            return@buildString
-        }
-
-        if (sensitivityInfo.isEmpty()) {
-            appendLine("⚠️  No column sensitivity information found.")
-            appendLine()
-            appendLine("To mark columns with privacy information:")
-            appendLine("COMMENT ON COLUMN $tableName.column_name IS '{\"sensitivity\":\"internal\", \"privacy\":\"non-personal\"}';")
-            appendLine("COMMENT ON COLUMN $tableName.column_name IS '{\"sensitivity\":\"internal\", \"privacy\":\"personal\"}';")
-        } else {
-            val piiColumns = sensitivityInfo.filter { it.value.isPii }
-            val nonPiiColumns = sensitivityInfo.filter { !it.value.isPii }
-
-            if (nonPiiColumns.isNotEmpty()) {
-                appendLine("✅ NON-PII COLUMNS (privacy: non-personal):")
-                nonPiiColumns.forEach { (columnName, info) ->
-                    appendLine("  • $columnName: ${info.privacy} data (${info.sensitivity} sensitivity)")
-                }
-                appendLine()
-            }
-
-            if (piiColumns.isNotEmpty()) {
-                appendLine("🔒 PII COLUMNS (privacy: personal):")
-                piiColumns.forEach { (columnName, info) ->
-                    val sensitivityLevel = if (info.isHighSensitivity) "HIGH" else "MEDIUM"
-                    appendLine("  • $columnName: ${info.privacy} data (${info.sensitivity} sensitivity - $sensitivityLevel)")
-                }
-                appendLine()
-            }
-
-            appendLine("Summary:")
-            appendLine("  • Columns with privacy information: ${sensitivityInfo.size}")
-            appendLine("  • Non-PII columns: ${nonPiiColumns.size}")
-            appendLine("  • PII columns: ${piiColumns.size}")
-
-            if (piiColumns.isNotEmpty()) {
-                appendLine()
-                appendLine("🛡️  Production Behavior:")
-                appendLine("   • PII columns marked as 'personal' will be filtered from production queries")
-                appendLine("   • Only columns marked as 'non-personal' are safe for production queries")
-            }
-        }
-    }
-}
 
 /**
  * Format EXPLAIN ANALYZE result for better readability using kotlinx.serialization
